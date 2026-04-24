@@ -14,7 +14,7 @@ def setup_dependencies():
     """Install required packages for Colab"""
     print("Installing dependencies...")
     subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "torch", "torchvision", "torchaudio", "--index-url", "https://download.pytorch.org/whl/cu118"])
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "lightning", "peft", "diffusers", "huggingface-hub", "pillow", "imageio", "pandas", "einops"])
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "lightning", "peft", "diffusers", "huggingface-hub", "pillow", "imageio", "pandas", "einops", "modelscope", "accelerate"])
     print("✓ Dependencies installed!")
 
 # Install dependencies FIRST
