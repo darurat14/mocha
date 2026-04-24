@@ -285,12 +285,18 @@ class MoChALoRALightning(pl.LightningModule):
                 print(f"  ✓ Found {len(dit_files)} DiT model file(s)")
                 
                 # Load ALL model files from the downloaded directory
-                print("Loading all model components...")
+                # BUT skip T5 encoder (only needed for inference, not training)
+                print("Loading model components...")
                 model_files = glob.glob(os.path.join(wan_path, "*.safetensors")) + \
                              glob.glob(os.path.join(wan_path, "*.pth"))
                 
                 print(f"  Found {len(model_files)} model file(s)")
                 for model_file in model_files:
+                    # Skip T5 encoder - it's huge and not needed for LoRA training
+                    if "t5" in model_file.lower() or "text_encoder" in model_file.lower():
+                        print(f"  Skipping: {os.path.basename(model_file)} (not needed for training)")
+                        continue
+                    
                     try:
                         print(f"  Loading: {os.path.basename(model_file)}")
                         model_manager.load_model(model_file, device=device, torch_dtype=torch_dtype)
@@ -359,8 +365,15 @@ class MoChALoRALightning(pl.LightningModule):
         noisy_latents = self.pipe.scheduler.add_noise(latents, noise, timestep)
         
         # ===== FORWARD PASS =====
+        # Use empty prompt (text encoder not loaded to save GPU memory)
         with torch.no_grad():
-            prompt_emb = self.pipe.encode_prompt("")
+            try:
+                prompt_emb = self.pipe.encode_prompt("")
+            except Exception as e:
+                # Fallback: create empty context if text encoder not available
+                print(f"⚠️  Using zero context (text encoder not loaded): {str(e)[:50]}")
+                batch_size = noisy_latents.shape[0]
+                prompt_emb = {"context": torch.zeros(batch_size, 1, 4096, device=device, dtype=torch.float32)}
         
         noise_pred = self.pipe.dit(
             noisy_latents,
