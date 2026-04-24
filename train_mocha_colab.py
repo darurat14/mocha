@@ -226,31 +226,25 @@ class MoChALoRALightning(pl.LightningModule):
             print("Loading Wan2.1-T2V-1.3B from HuggingFace...")
             
             try:
-                # Download Wan model
-                print("Step 1/3: Downloading Wan2.1-T2V-1.3B...")
+                # Download only DiT model (needed for training)
+                print("Downloading Wan2.1-T2V-1.3B DiT...")
                 wan_path = snapshot_download(repo_id="Wan-AI/Wan2.1-T2V-1.3B", local_dir="./models/wan2.1_1.3b")
-                safetensor_files = glob.glob(os.path.join(wan_path, "*.safetensors"))
-                print(f"  ✓ Found {len(safetensor_files)} model files")
                 
-                # Download text encoder
-                print("Step 2/3: Downloading T5 text encoder...")
-                t5_path = snapshot_download(repo_id="Wan-AI/Wan2.1-T2V-1.3B", local_dir="./models/wan2.1_1.3b")
+                # Find DiT model file
+                dit_files = glob.glob(os.path.join(wan_path, "diffusion_pytorch_model.safetensors"))
+                if not dit_files:
+                    dit_files = glob.glob(os.path.join(wan_path, "*.safetensors"))
                 
-                # Download VAE
-                print("Step 3/3: Downloading VAE...")
-                vae_path = snapshot_download(repo_id="Wan-AI/Wan2.1-T2V-1.3B", local_dir="./models/wan2.1_1.3b")
+                print(f"  ✓ Found {len(dit_files)} DiT model file(s)")
                 
-                # Load models - use glob to find actual files
-                all_files = glob.glob(os.path.join(wan_path, "*.safetensors")) + \
-                           glob.glob(os.path.join(wan_path, "*.pth"))
-                
-                print(f"Loading {len(all_files)} model files...")
-                for model_file in all_files:
-                    try:
-                        print(f"  Loading: {os.path.basename(model_file)}")
-                        model_manager.load_model(model_file, device=device, torch_dtype=torch_dtype)
-                    except Exception as e:
-                        print(f"    ⚠️  Skip (optional): {str(e)[:100]}")
+                # Load ONLY the DiT model (needed for LoRA training)
+                # Skip T5 encoder and VAE - not needed for training, only inference
+                if dit_files:
+                    print(f"Loading DiT: {os.path.basename(dit_files[0])}")
+                    model_manager.load_model(dit_files[0], device=device, torch_dtype=torch_dtype)
+                    print("  ✓ DiT loaded successfully")
+                else:
+                    raise FileNotFoundError("Could not find diffusion_pytorch_model.safetensors")
                 
             except Exception as e:
                 print(f"❌ Error loading Wan models: {e}")
