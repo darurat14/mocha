@@ -393,7 +393,7 @@ def main():
     parser.add_argument("--lora_rank", type=int, default=8, help="LoRA rank")
     parser.add_argument("--lora_alpha", type=int, default=16, help="LoRA alpha")
     parser.add_argument("--use_1_3b", action="store_true", help="Use 1.3B model instead of 14B")
-    parser.add_argument("--use_gpu", action="store_true", help="Use GPU if available")
+    parser.add_argument("--no_gpu", action="store_true", help="Disable GPU (use CPU instead)")
     
     args = parser.parse_args()
     
@@ -436,12 +436,14 @@ def main():
     print(f"✓ Dataset loaded: {len(dataset)} samples\n")
     
     # Setup trainer
-    use_gpu = args.use_gpu and torch.cuda.is_available()
+    use_gpu = (not args.no_gpu) and torch.cuda.is_available()
     accelerator = "gpu" if use_gpu else "cpu"
-    devices = 1 if use_gpu else None
+    devices = 1  # Always 1 device (single GPU or single CPU)
     print(f"Training on: {accelerator.upper()}")
     if use_gpu:
         print(f"  GPU: {torch.cuda.get_device_name(0)}")
+    else:
+        print(f"  CPU (to use GPU, remove --no_gpu flag)")
     
     checkpoint_callback = ModelCheckpoint(
         dirpath=args.output_dir,
@@ -459,6 +461,7 @@ def main():
         callbacks=[checkpoint_callback],
         log_every_n_steps=10,
         enable_progress_bar=True,
+        precision="16-mixed" if use_gpu else "32",  # Mixed precision for GPU
     )
     
     # Train
