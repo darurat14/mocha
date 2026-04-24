@@ -322,6 +322,10 @@ class MoChALoRALightning(pl.LightningModule):
             with torch.no_grad():
                 latents = self.pipe.vae.encode(video, device=device)
             
+            # Move VAE to CPU to free GPU memory for training
+            self.pipe.vae.to("cpu")
+            torch.cuda.empty_cache()
+            
             # Try to save for next epoch
             try:
                 torch.save(latents.cpu(), batch["latent_path"][0])
