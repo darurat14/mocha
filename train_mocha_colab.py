@@ -237,14 +237,27 @@ class MoChALoRALightning(pl.LightningModule):
                 
                 print(f"  ✓ Found {len(dit_files)} DiT model file(s)")
                 
-                # Load ONLY the DiT model (needed for LoRA training)
-                # Skip T5 encoder and VAE - not needed for training, only inference
+                # Load DiT model (needed for LoRA training)
                 if dit_files:
                     print(f"Loading DiT: {os.path.basename(dit_files[0])}")
                     model_manager.load_model(dit_files[0], device=device, torch_dtype=torch_dtype)
                     print("  ✓ DiT loaded successfully")
                 else:
                     raise FileNotFoundError("Could not find diffusion_pytorch_model.safetensors")
+                
+                # Load VAE (needed for encoding videos to latents)
+                print("Looking for VAE model...")
+                vae_files = glob.glob(os.path.join(wan_path, "*vae*.safetensors")) + \
+                           glob.glob(os.path.join(wan_path, "*vae*.pth"))
+                if vae_files:
+                    print(f"Loading VAE: {os.path.basename(vae_files[0])}")
+                    try:
+                        model_manager.load_model(vae_files[0], device=device, torch_dtype=torch_dtype)
+                        print("  ✓ VAE loaded successfully")
+                    except Exception as e:
+                        print(f"  ⚠️  VAE loading warning (optional): {str(e)[:100]}")
+                else:
+                    print("  ⚠️  No VAE found - will try to use default from pipeline")
                 
             except Exception as e:
                 print(f"❌ Error loading Wan models: {e}")
@@ -423,8 +436,12 @@ def main():
     print(f"✓ Dataset loaded: {len(dataset)} samples\n")
     
     # Setup trainer
-    device = "gpu" if (args.use_gpu and torch.cuda.is_available()) else "cpu"
-    print(f"Training on: {device.upper()}")
+    use_gpu = args.use_gpu and torch.cuda.is_available()
+    accelerator = "gpu" if use_gpu else "cpu"
+    devices = 1 if use_gpu else None
+    print(f"Training on: {accelerator.upper()}")
+    if use_gpu:
+        print(f"  GPU: {torch.cuda.get_device_name(0)}")
     
     checkpoint_callback = ModelCheckpoint(
         dirpath=args.output_dir,
@@ -437,8 +454,8 @@ def main():
     trainer = pl.Trainer(
         max_epochs=args.num_epochs,
         max_steps=args.max_steps,
-        accelerator=device,
-        devices=1 if torch.cuda.is_available() else None,
+        accelerator=accelerator,
+        devices=devices,
         callbacks=[checkpoint_callback],
         log_every_n_steps=10,
         enable_progress_bar=True,
