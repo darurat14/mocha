@@ -307,9 +307,9 @@ class MoChALoRALightning(pl.LightningModule):
         device = self.device
         
         # ===== ENCODE VIDEO TO LATENTS (on-the-fly to save GPU memory) =====
-        video = batch["video"].to(device)
-        
         if batch["needs_cache"][0]:
+            # Encode fresh video
+            video = batch["video"].to(device)
             print(f"[Batch {batch_idx}] Encoding video to latents...")
             
             if self.pipe.vae is None:
@@ -326,8 +326,9 @@ class MoChALoRALightning(pl.LightningModule):
             try:
                 torch.save(latents.cpu(), batch["latent_path"][0])
             except:
-                pass  # Ignore save errors (disk full, permissions, etc)
+                pass  # Ignore save errors
         else:
+            # Load pre-cached latent
             latents = torch.load(batch["latent_path"][0]).to(device)
         
         # ===== DIFFUSION PROCESS =====
