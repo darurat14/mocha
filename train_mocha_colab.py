@@ -434,6 +434,9 @@ def main():
     parser.add_argument("--learning_rate", type=float, default=1e-4, help="Learning rate")
     parser.add_argument("--lora_rank", type=int, default=8, help="LoRA rank")
     parser.add_argument("--lora_alpha", type=int, default=16, help="LoRA alpha")
+    parser.add_argument("--num_frames", type=int, default=161, help="Number of video frames (reduce to save memory)")
+    parser.add_argument("--height", type=int, default=480, help="Video height (reduce to save memory)")
+    parser.add_argument("--width", type=int, default=832, help="Video width (reduce to save memory)")
     parser.add_argument("--use_1_3b", action="store_true", help="Use 1.3B model instead of 14B")
     parser.add_argument("--no_gpu", action="store_true", help="Disable GPU (use CPU instead)")
     
@@ -465,7 +468,12 @@ def main():
     
     # Load dataset
     print(f"\nLoading training data from {args.data_path}...")
-    base_dataset = VideoRefDataset(args.data_path)
+    base_dataset = VideoRefDataset(
+        args.data_path,
+        num_frames=args.num_frames,
+        height=args.height,
+        width=args.width
+    )
     dataset = LatentDataset(base_dataset, args.latent_dir)
     
     dataloader = DataLoader(
