@@ -44,50 +44,13 @@ from lightning.pytorch.callbacks import ModelCheckpoint
 # PRE-ENCODING HELPER
 # =========================
 def preencode_videos_to_latents(model, dataset, latent_dir, device):
-    """Pre-encode all training videos to latents to avoid VAE during training"""
+    """Pre-encode all training videos to latents (optional, skipped to save GPU memory)"""
     print("\n" + "="*60)
     print("Pre-encoding videos to latents...")
     print("="*60)
     
-    if model.pipe.vae is None:
-        print("⚠️  VAE not available - skipping pre-encoding")
-        print("   Note: Videos will be encoded on-the-fly during training (slower)")
-        return
-    
-    os.makedirs(latent_dir, exist_ok=True)
-    
-    # Only encode videos that don't have cached latents yet
-    videos_to_encode = []
-    for idx in range(len(dataset)):
-        latent_path = os.path.join(latent_dir, f"{idx}.pt")
-        if not os.path.exists(latent_path):
-            videos_to_encode.append(idx)
-    
-    if not videos_to_encode:
-        print(f"✓ All {len(dataset)} videos already encoded")
-        return
-    
-    print(f"Encoding {len(videos_to_encode)} videos...")
-    
-    for idx in videos_to_encode:
-        try:
-            video_data = dataset.base_dataset[idx]
-            video = video_data["video"].unsqueeze(0).to(device)  # Add batch dim
-            
-            # Cast to correct dtype (match VAE dtype)
-            vae_dtype = next(model.pipe.vae.parameters()).dtype
-            video = video.to(dtype=vae_dtype)
-            
-            with torch.no_grad():
-                latents = model.pipe.vae.encode(video, device=device)
-            
-            latent_path = os.path.join(latent_dir, f"{idx}.pt")
-            torch.save(latents.cpu(), latent_path)
-            print(f"  [{idx+1}/{len(videos_to_encode)}] Encoded: {latent_path}")
-            
-        except Exception as e:
-            print(f"  ⚠️  Error encoding video {idx}: {str(e)[:100]}")
-    
+    print("⚠️  Skipping pre-encoding to save GPU memory (Tesla T4 only has 14GB)")
+    print("   Videos will be encoded on-the-fly during training (slower but works)")
     print(f"✓ Pre-encoding complete!\n")
 
 
@@ -343,48 +306,46 @@ class MoChALoRALightning(pl.LightningModule):
     def training_step(self, batch, batch_idx):
         device = self.device
         
-        # ===== LATENT CACHING =====
+        # ===== ENCODE VIDEO TO LATENTS (on-the-fly to save GPU memory) =====
+        video = batch["video"].to(device)
+        
         if batch["needs_cache"][0]:
-            video = batch["video"].to(device)
             print(f"[Batch {batch_idx}] Encoding video to latents...")
             
             if self.pipe.vae is None:
-                raise RuntimeError(
-                    "VAE not loaded! Videos must be pre-encoded before training.\n"
-                    "Add a pre-encoding step after load_models()."
-                )
+                raise RuntimeError("VAE not loaded! Cannot encode video to latents.")
+            
+            # Cast to correct dtype
+            vae_dtype = next(self.pipe.vae.parameters()).dtype
+            video = video.to(dtype=vae_dtype)
             
             with torch.no_grad():
                 latents = self.pipe.vae.encode(video, device=device)
-            torch.save(latents.cpu(), batch["latent_path"][0])
+            
+            # Try to save for next epoch
+            try:
+                torch.save(latents.cpu(), batch["latent_path"][0])
+            except:
+                pass  # Ignore save errors (disk full, permissions, etc)
         else:
             latents = torch.load(batch["latent_path"][0]).to(device)
         
         # ===== DIFFUSION PROCESS =====
         noise = torch.randn_like(latents)
         
-        # Sample random timestep (on CPU for scheduler, then move to device if needed)
+        # Sample random timestep
         t_id = torch.randint(0, self.pipe.scheduler.num_train_timesteps, (1,), device="cpu")
         timestep = self.pipe.scheduler.timesteps[t_id].to(device)
         
         noisy_latents = self.pipe.scheduler.add_noise(latents, noise, timestep)
         
         # ===== FORWARD PASS =====
-        # Use empty prompt (text encoder not loaded to save GPU memory)
-        with torch.no_grad():
-            try:
-                prompt_emb = self.pipe.encode_prompt("")
-            except Exception as e:
-                # Fallback: create empty context if text encoder not available
-                print(f"⚠️  Using zero context (text encoder not loaded): {str(e)[:50]}")
-                batch_size = noisy_latents.shape[0]
-                prompt_emb = {"context": torch.zeros(batch_size, 1, 4096, device=device, dtype=torch.float32)}
+        # Create empty context (text encoder not loaded to save GPU memory)
+        batch_size = noisy_latents.shape[0]
+        context = torch.zeros(batch_size, 1, 4096, device=device, dtype=noisy_latents.dtype)
         
-        noise_pred = self.pipe.dit(
-            noisy_latents,
-            timestep=timestep,
-            encoder_hidden_states=prompt_emb["context"],
-        )
+        # Call WanModel forward with positional args: (noisy_latents, timestep, context)
+        noise_pred = self.pipe.dit(noisy_latents, timestep, context)
         
         loss = torch.nn.functional.mse_loss(noise_pred.float(), noise.float())
         self.log("train_loss", loss, prog_bar=True)
