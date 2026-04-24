@@ -1,0 +1,15 @@
+torch
+torchvision
+transformers
+controlnet-aux
+imageio
+imageio[ffmpeg]
+safetensors
+einops
+sentencepiece
+protobuf
+modelscope
+ftfy
+lightning
+pandas
+websockets

@@ -1,0 +1,46 @@
+# Model Files (Large - Don't Push)
+models/
+checkpoints/
+*.pth
+*.pt
+*.safetensors
+*.ckpt
+
+# Training Data & Results
+data/
+results/
+latents/
+lightning_logs/
+teasers/
+
+# Environment
+.env
+.env-*
+venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+
+# IDE & Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Python
+dist/
+build/
+*.egg-info/
+.pytest_cache/
+.coverage
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# System
+.DS_Store
+Thumbs.db
