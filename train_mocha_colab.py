@@ -209,8 +209,18 @@ class MoChALoRALightning(pl.LightningModule):
         from huggingface_hub import snapshot_download
         import glob
         
-        device = torch.device("cpu")
-        model_manager = ModelManager(torch_dtype=torch.float32, device=device)
+        # Auto-detect GPU or use CPU
+        if torch.cuda.is_available():
+            device = torch.device("cuda")
+            print(f"✓ GPU detected: {torch.cuda.get_device_name(0)}")
+            torch_dtype = torch.bfloat16  # GPU supports mixed precision
+        else:
+            device = torch.device("cpu")
+            print("⚠️  No GPU detected - using CPU (training will be SLOW)")
+            print("    Tip: In Colab, enable GPU via Runtime > Change runtime type")
+            torch_dtype = torch.float32
+        
+        model_manager = ModelManager(torch_dtype=torch_dtype, device=device)
         
         if self.use_1_3b:
             print("Loading Wan2.1-T2V-1.3B from HuggingFace...")
@@ -238,7 +248,7 @@ class MoChALoRALightning(pl.LightningModule):
                 for model_file in all_files:
                     try:
                         print(f"  Loading: {os.path.basename(model_file)}")
-                        model_manager.load_model(model_file, device=device, torch_dtype=torch.float32)
+                        model_manager.load_model(model_file, device=device, torch_dtype=torch_dtype)
                     except Exception as e:
                         print(f"    ⚠️  Skip (optional): {str(e)[:100]}")
                 
