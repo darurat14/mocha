@@ -203,70 +203,65 @@ class MoChALoRALightning(pl.LightningModule):
         """Load WanVideo MoCha pipeline and inject LoRA"""
         print("Loading WanVideo MoCha pipeline...")
         
-        # Import with better error handling
-        try:
-            from diffsynth.models import ModelManager
-            from diffsynth.pipelines import WanVideoMoChaPipeline
-            print("✓ Successfully imported from diffsynth")
-        except ImportError as e:
-            print(f"❌ Import error: {e}")
-            raise
-        
+        from diffsynth.models import ModelManager
+        from diffsynth.pipelines import WanVideoMoChaPipeline
         from peft import LoraConfig, inject_adapter_in_model
         from huggingface_hub import snapshot_download
         import glob
         
         device = torch.device("cpu")
+        model_manager = ModelManager(torch_dtype=torch.float32, device=device)
         
         if self.use_1_3b:
-            print("Loading Wan2.1-T2V-1.3B...")
+            print("Loading Wan2.1-T2V-1.3B from HuggingFace...")
+            
             try:
-                print("Downloading model from HuggingFace...")
-                wan_model_path = snapshot_download(repo_id="Wan-AI/Wan2.1-T2V-1.3B", local_dir="./models/wan2.1_1.3b")
-                print(f"✓ Model downloaded to: {wan_model_path}")
+                # Download Wan model
+                print("Step 1/3: Downloading Wan2.1-T2V-1.3B...")
+                wan_path = snapshot_download(repo_id="Wan-AI/Wan2.1-T2V-1.3B", local_dir="./models/wan2.1_1.3b")
+                safetensor_files = glob.glob(os.path.join(wan_path, "*.safetensors"))
+                print(f"  ✓ Found {len(safetensor_files)} model files")
                 
-                # Find all model files in the downloaded directory
-                safetensor_files = glob.glob(os.path.join(wan_model_path, "*.safetensors"))
-                print(f"Found {len(safetensor_files)} safetensor files")
+                # Download text encoder
+                print("Step 2/3: Downloading T5 text encoder...")
+                t5_path = snapshot_download(repo_id="Wan-AI/Wan2.1-T2V-1.3B", local_dir="./models/wan2.1_1.3b")
                 
-                # Load directly without model_manager (which doesn't support WanModel yet)
-                model_manager = ModelManager(torch_dtype=torch.float32, device=device)
+                # Download VAE
+                print("Step 3/3: Downloading VAE...")
+                vae_path = snapshot_download(repo_id="Wan-AI/Wan2.1-T2V-1.3B", local_dir="./models/wan2.1_1.3b")
                 
-                # Load other required models
-                model_manager.load_models([
-                    "./models/models_t5_umt5-xxl-enc-bf16.pth",
-                    "./models/Wan2.1_VAE.pth",
-                ])
+                # Load models - use glob to find actual files
+                all_files = glob.glob(os.path.join(wan_path, "*.safetensors")) + \
+                           glob.glob(os.path.join(wan_path, "*.pth"))
                 
-                # Load Wan DIT model
-                if safetensor_files:
-                    print(f"Loading WanModel from: {safetensor_files[0]}")
-                    model_manager.load_model(safetensor_files[0], device=device, torch_dtype=torch.float32)
+                print(f"Loading {len(all_files)} model files...")
+                for model_file in all_files:
+                    try:
+                        print(f"  Loading: {os.path.basename(model_file)}")
+                        model_manager.load_model(model_file, device=device, torch_dtype=torch.float32)
+                    except Exception as e:
+                        print(f"    ⚠️  Skip (optional): {str(e)[:100]}")
                 
             except Exception as e:
-                print(f"⚠️  Error with HF download: {e}")
-                print("Using local fallback model...")
-                model_manager = ModelManager(torch_dtype=torch.float32, device=device)
-                model_manager.load_models([
-                    "./models/diffusion_pytorch_model.safetensors",
-                    "./models/models_t5_umt5-xxl-enc-bf16.pth",
-                    "./models/Wan2.1_VAE.pth",
-                ])
+                print(f"❌ Error loading Wan models: {e}")
+                print("This might be due to missing model files. Please ensure:")
+                print("  1. HuggingFace token is set if model is private")
+                print("  2. You have enough disk space (~50GB)")
+                raise
+                
         else:
             print("Loading Wan2.1-T2V-14B...")
-            model_manager = ModelManager(torch_dtype=torch.float32, device=device)
-            model_manager.load_models([
-                "./models/diffusion_pytorch_model.safetensors",
-                "./models/models_t5_umt5-xxl-enc-bf16.pth",
-                "./models/Wan2.1_VAE.pth",
-            ])
+            print("❌ 14B model requires local model files. Please use --use_1_3b for Colab.")
+            raise ValueError("14B model not supported in Colab mode. Use --use_1_3b")
         
+        print("Creating pipeline...")
         self.pipe = WanVideoMoChaPipeline.from_model_manager(model_manager, device=device)
         
         # Freeze base model
         self.pipe.requires_grad_(False)
         
         # Inject LoRA
+        print("Injecting LoRA adapters...")
         lora_config = LoraConfig(
             r=self.lora_rank,
             lora_alpha=self.lora_alpha,
@@ -276,7 +271,6 @@ class MoChALoRALightning(pl.LightningModule):
             task_type="FEATURE_EXTRACTION",
         )
         
-        print("Injecting LoRA adapters...")
         self.pipe.dit = inject_adapter_in_model(lora_config, self.pipe.dit)
         self.pipe.train()
         print("✓ Model loaded with LoRA!")
