@@ -211,24 +211,10 @@ class MoChALoRALightning(pl.LightningModule):
             print("✓ Successfully imported from diffsynth")
         except ImportError as e:
             print(f"❌ Import error: {e}")
-            print("\nTrying alternative import method...")
-            try:
-                # Try importing the modules individually
-                import diffsynth.models.model_manager as mm
-                import diffsynth.pipelines.wan_video_mocha as wm
-                ModelManager = mm.ModelManager
-                WanVideoMoChaPipeline = wm.WanVideoMoChaPipeline
-                print("✓ Successfully imported using alternative method")
-            except Exception as e2:
-                print(f"❌ Alternative import also failed: {e2}")
-                print("\nDebug info:")
-                print(f"  Current dir: {os.getcwd()}")
-                print(f"  diffsynth exists: {os.path.exists('diffsynth')}")
-                print(f"  models/__init__.py: {os.path.exists('diffsynth/models/__init__.py')}")
-                print(f"  model_manager.py: {os.path.exists('diffsynth/models/model_manager.py')}")
-                raise
+            raise
         
         from peft import LoraConfig, inject_adapter_in_model
+        from huggingface_hub import snapshot_download
         
         device = torch.device("cpu")
         
@@ -237,11 +223,23 @@ class MoChALoRALightning(pl.LightningModule):
         # Load model paths
         if self.use_1_3b:
             print("Loading Wan2.1-T2V-1.3B...")
-            model_manager.load_models([
-                "Wan-AI/Wan2.1-T2V-1.3B",
-                "./models/models_t5_umt5-xxl-enc-bf16.pth",
-                "./models/Wan2.1_VAE.pth",
-            ])
+            try:
+                # Try to download from HuggingFace first
+                print("Downloading model from HuggingFace...")
+                model_path = snapshot_download(repo_id="Wan-AI/Wan2.1-T2V-1.3B", local_dir="./models/wan2.1_1.3b")
+                model_manager.load_models([
+                    model_path,
+                    "./models/models_t5_umt5-xxl-enc-bf16.pth",
+                    "./models/Wan2.1_VAE.pth",
+                ])
+            except Exception as e:
+                print(f"⚠️  Could not download from HF: {e}")
+                print("Trying local model path...")
+                model_manager.load_models([
+                    "./models/diffusion_pytorch_model.safetensors",
+                    "./models/models_t5_umt5-xxl-enc-bf16.pth",
+                    "./models/Wan2.1_VAE.pth",
+                ])
         else:
             print("Loading Wan2.1-T2V-14B...")
             model_manager.load_models([
