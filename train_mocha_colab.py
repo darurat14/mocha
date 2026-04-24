@@ -5,6 +5,22 @@ Paste this entire script into a Colab cell and run!
 
 import os
 import sys
+import subprocess
+
+# =========================
+# SETUP DEPENDENCIES (MUST BE FIRST!)
+# =========================
+def setup_dependencies():
+    """Install required packages for Colab"""
+    print("Installing dependencies...")
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "torch", "torchvision", "torchaudio", "--index-url", "https://download.pytorch.org/whl/cu118"])
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "lightning", "peft", "diffusers", "huggingface-hub", "pillow", "imageio", "pandas", "einops"])
+    print("✓ Dependencies installed!")
+
+# Install dependencies FIRST
+setup_dependencies()
+
+# NOW import everything else
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
@@ -18,17 +34,6 @@ from torchvision.transforms import v2
 from einops import rearrange
 import lightning as pl
 from lightning.pytorch.callbacks import ModelCheckpoint
-
-
-# =========================
-# SETUP DEPENDENCIES
-# =========================
-def setup_dependencies():
-    """Install required packages for Colab"""
-    print("Installing dependencies...")
-    os.system("pip install -q torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118")
-    os.system("pip install -q lightning peft diffusers huggingface-hub pillow imageio pandas einops")
-    print("✓ Dependencies installed!")
 
 
 # =========================
