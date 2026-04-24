@@ -7,7 +7,6 @@ checkpoints/
 *.ckpt
 
 # Training Data & Results
-data/
 results/
 latents/
 lightning_logs/
