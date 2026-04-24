@@ -74,6 +74,10 @@ def preencode_videos_to_latents(model, dataset, latent_dir, device):
             video_data = dataset.base_dataset[idx]
             video = video_data["video"].unsqueeze(0).to(device)  # Add batch dim
             
+            # Cast to correct dtype (match VAE dtype)
+            vae_dtype = next(model.pipe.vae.parameters()).dtype
+            video = video.to(dtype=vae_dtype)
+            
             with torch.no_grad():
                 latents = model.pipe.vae.encode(video, device=device)
             
@@ -359,8 +363,9 @@ class MoChALoRALightning(pl.LightningModule):
         # ===== DIFFUSION PROCESS =====
         noise = torch.randn_like(latents)
         
-        t_id = torch.randint(0, self.pipe.scheduler.num_train_timesteps, (1,), device=device)
-        timestep = self.pipe.scheduler.timesteps[t_id]
+        # Sample random timestep (on CPU for scheduler, then move to device if needed)
+        t_id = torch.randint(0, self.pipe.scheduler.num_train_timesteps, (1,), device="cpu")
+        timestep = self.pipe.scheduler.timesteps[t_id].to(device)
         
         noisy_latents = self.pipe.scheduler.add_noise(latents, noise, timestep)
         
