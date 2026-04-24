@@ -15,20 +15,14 @@ def setup_dependencies():
     print("Installing dependencies...")
     subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "torch", "torchvision", "torchaudio", "--index-url", "https://download.pytorch.org/whl/cu118"])
     subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "lightning", "peft", "diffusers", "huggingface-hub", "pillow", "imageio", "pandas", "einops"])
-    
-    # Install diffsynth from current repo in editable mode
-    current_dir = os.getcwd()
-    if os.path.exists(os.path.join(current_dir, "setup.py")) or os.path.exists(os.path.join(current_dir, "diffsynth")):
-        print("Installing diffsynth from local repo...")
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "-e", "."])
-    
     print("✓ Dependencies installed!")
 
 # Install dependencies FIRST
 setup_dependencies()
 
-# Add current directory to path for imports
+# Add current directory to path for imports (diffsynth is in this directory)
 sys.path.insert(0, os.getcwd())
+print(f"✓ Added {os.getcwd()} to Python path")
 
 # NOW import everything else
 import torch
