@@ -205,7 +205,6 @@ class MoChALoRALightning(pl.LightningModule):
         
         # Import with better error handling
         try:
-            # Direct imports to avoid wildcard import issues
             from diffsynth.models import ModelManager
             from diffsynth.pipelines import WanVideoMoChaPipeline
             print("✓ Successfully imported from diffsynth")
@@ -215,26 +214,39 @@ class MoChALoRALightning(pl.LightningModule):
         
         from peft import LoraConfig, inject_adapter_in_model
         from huggingface_hub import snapshot_download
+        import glob
         
         device = torch.device("cpu")
         
-        model_manager = ModelManager(torch_dtype=torch.float32, device=device)
-        
-        # Load model paths
         if self.use_1_3b:
             print("Loading Wan2.1-T2V-1.3B...")
             try:
-                # Try to download from HuggingFace first
                 print("Downloading model from HuggingFace...")
-                model_path = snapshot_download(repo_id="Wan-AI/Wan2.1-T2V-1.3B", local_dir="./models/wan2.1_1.3b")
+                wan_model_path = snapshot_download(repo_id="Wan-AI/Wan2.1-T2V-1.3B", local_dir="./models/wan2.1_1.3b")
+                print(f"✓ Model downloaded to: {wan_model_path}")
+                
+                # Find all model files in the downloaded directory
+                safetensor_files = glob.glob(os.path.join(wan_model_path, "*.safetensors"))
+                print(f"Found {len(safetensor_files)} safetensor files")
+                
+                # Load directly without model_manager (which doesn't support WanModel yet)
+                model_manager = ModelManager(torch_dtype=torch.float32, device=device)
+                
+                # Load other required models
                 model_manager.load_models([
-                    model_path,
                     "./models/models_t5_umt5-xxl-enc-bf16.pth",
                     "./models/Wan2.1_VAE.pth",
                 ])
+                
+                # Load Wan DIT model
+                if safetensor_files:
+                    print(f"Loading WanModel from: {safetensor_files[0]}")
+                    model_manager.load_model(safetensor_files[0], device=device, torch_dtype=torch.float32)
+                
             except Exception as e:
-                print(f"⚠️  Could not download from HF: {e}")
-                print("Trying local model path...")
+                print(f"⚠️  Error with HF download: {e}")
+                print("Using local fallback model...")
+                model_manager = ModelManager(torch_dtype=torch.float32, device=device)
                 model_manager.load_models([
                     "./models/diffusion_pytorch_model.safetensors",
                     "./models/models_t5_umt5-xxl-enc-bf16.pth",
@@ -242,6 +254,7 @@ class MoChALoRALightning(pl.LightningModule):
                 ])
         else:
             print("Loading Wan2.1-T2V-14B...")
+            model_manager = ModelManager(torch_dtype=torch.float32, device=device)
             model_manager.load_models([
                 "./models/diffusion_pytorch_model.safetensors",
                 "./models/models_t5_umt5-xxl-enc-bf16.pth",
