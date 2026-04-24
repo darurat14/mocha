@@ -1,5 +1,4 @@
 # Model Files (Large - Don't Push)
-models/
 checkpoints/
 *.pth
 *.pt
