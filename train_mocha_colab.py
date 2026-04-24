@@ -203,13 +203,30 @@ class MoChALoRALightning(pl.LightningModule):
         """Load WanVideo MoCha pipeline and inject LoRA"""
         print("Loading WanVideo MoCha pipeline...")
         
-        # Import here to avoid module not found errors
+        # Import with better error handling
         try:
-            from diffsynth import ModelManager, WanVideoMoChaPipeline
+            # Direct imports to avoid wildcard import issues
+            from diffsynth.models import ModelManager
+            from diffsynth.pipelines import WanVideoMoChaPipeline
+            print("✓ Successfully imported from diffsynth")
         except ImportError as e:
-            print(f"Error importing diffsynth: {e}")
-            print("Make sure you've cloned the MoCha repo and are in the correct directory")
-            raise
+            print(f"❌ Import error: {e}")
+            print("\nTrying alternative import method...")
+            try:
+                # Try importing the modules individually
+                import diffsynth.models.model_manager as mm
+                import diffsynth.pipelines.wan_video_mocha as wm
+                ModelManager = mm.ModelManager
+                WanVideoMoChaPipeline = wm.WanVideoMoChaPipeline
+                print("✓ Successfully imported using alternative method")
+            except Exception as e2:
+                print(f"❌ Alternative import also failed: {e2}")
+                print("\nDebug info:")
+                print(f"  Current dir: {os.getcwd()}")
+                print(f"  diffsynth exists: {os.path.exists('diffsynth')}")
+                print(f"  models/__init__.py: {os.path.exists('diffsynth/models/__init__.py')}")
+                print(f"  model_manager.py: {os.path.exists('diffsynth/models/model_manager.py')}")
+                raise
         
         from peft import LoraConfig, inject_adapter_in_model
         
@@ -313,6 +330,11 @@ def main():
     print("MoCha LoRA Training Setup")
     print("="*60)
     
+    # Debug: Check directory structure
+    cwd = os.getcwd()
+    print(f"\nCurrent directory: {cwd}")
+    print(f"Python path includes: {cwd in sys.path}")
+    
     # Check if we're in the right directory
     if not os.path.exists("diffsynth"):
         print("❌ ERROR: diffsynth folder not found!")
@@ -322,8 +344,19 @@ def main():
         print("  !python train_mocha_colab.py --use_1_3b")
         sys.exit(1)
     
+    # Debug: Check diffsynth structure
+    print("\nChecking diffsynth structure...")
+    if os.path.exists("diffsynth/__init__.py"):
+        print("  ✓ diffsynth/__init__.py exists")
+    if os.path.exists("diffsynth/models"):
+        print("  ✓ diffsynth/models/ exists")
+        if os.path.exists("diffsynth/models/__init__.py"):
+            print("  ✓ diffsynth/models/__init__.py exists")
+        else:
+            print("  ⚠️  diffsynth/models/__init__.py MISSING!")
+    
     if not os.path.exists("./data/train_data.csv"):
-        print("⚠️  WARNING: ./data/train_data.csv not found!")
+        print("\n⚠️  WARNING: ./data/train_data.csv not found!")
         print("   Make sure your training data is in ./data/ directory")
     
     parser = argparse.ArgumentParser(description="MoCha LoRA Training for Colab")
