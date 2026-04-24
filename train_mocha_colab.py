@@ -41,6 +41,53 @@ from lightning.pytorch.callbacks import ModelCheckpoint
 
 
 # =========================
+# PRE-ENCODING HELPER
+# =========================
+def preencode_videos_to_latents(model, dataset, latent_dir, device):
+    """Pre-encode all training videos to latents to avoid VAE during training"""
+    print("\n" + "="*60)
+    print("Pre-encoding videos to latents...")
+    print("="*60)
+    
+    if model.pipe.vae is None:
+        print("⚠️  VAE not available - skipping pre-encoding")
+        print("   Note: Videos will be encoded on-the-fly during training (slower)")
+        return
+    
+    os.makedirs(latent_dir, exist_ok=True)
+    
+    # Only encode videos that don't have cached latents yet
+    videos_to_encode = []
+    for idx in range(len(dataset)):
+        latent_path = os.path.join(latent_dir, f"{idx}.pt")
+        if not os.path.exists(latent_path):
+            videos_to_encode.append(idx)
+    
+    if not videos_to_encode:
+        print(f"✓ All {len(dataset)} videos already encoded")
+        return
+    
+    print(f"Encoding {len(videos_to_encode)} videos...")
+    
+    for idx in videos_to_encode:
+        try:
+            video_data = dataset.base_dataset[idx]
+            video = video_data["video"].unsqueeze(0).to(device)  # Add batch dim
+            
+            with torch.no_grad():
+                latents = model.pipe.vae.encode(video, device=device)
+            
+            latent_path = os.path.join(latent_dir, f"{idx}.pt")
+            torch.save(latents.cpu(), latent_path)
+            print(f"  [{idx+1}/{len(videos_to_encode)}] Encoded: {latent_path}")
+            
+        except Exception as e:
+            print(f"  ⚠️  Error encoding video {idx}: {str(e)[:100]}")
+    
+    print(f"✓ Pre-encoding complete!\n")
+
+
+# =========================
 # VIDEO DATASET
 # =========================
 class VideoRefDataset(Dataset):
@@ -237,27 +284,18 @@ class MoChALoRALightning(pl.LightningModule):
                 
                 print(f"  ✓ Found {len(dit_files)} DiT model file(s)")
                 
-                # Load DiT model (needed for LoRA training)
-                if dit_files:
-                    print(f"Loading DiT: {os.path.basename(dit_files[0])}")
-                    model_manager.load_model(dit_files[0], device=device, torch_dtype=torch_dtype)
-                    print("  ✓ DiT loaded successfully")
-                else:
-                    raise FileNotFoundError("Could not find diffusion_pytorch_model.safetensors")
+                # Load ALL model files from the downloaded directory
+                print("Loading all model components...")
+                model_files = glob.glob(os.path.join(wan_path, "*.safetensors")) + \
+                             glob.glob(os.path.join(wan_path, "*.pth"))
                 
-                # Load VAE (needed for encoding videos to latents)
-                print("Looking for VAE model...")
-                vae_files = glob.glob(os.path.join(wan_path, "*vae*.safetensors")) + \
-                           glob.glob(os.path.join(wan_path, "*vae*.pth"))
-                if vae_files:
-                    print(f"Loading VAE: {os.path.basename(vae_files[0])}")
+                print(f"  Found {len(model_files)} model file(s)")
+                for model_file in model_files:
                     try:
-                        model_manager.load_model(vae_files[0], device=device, torch_dtype=torch_dtype)
-                        print("  ✓ VAE loaded successfully")
+                        print(f"  Loading: {os.path.basename(model_file)}")
+                        model_manager.load_model(model_file, device=device, torch_dtype=torch_dtype)
                     except Exception as e:
-                        print(f"  ⚠️  VAE loading warning (optional): {str(e)[:100]}")
-                else:
-                    print("  ⚠️  No VAE found - will try to use default from pipeline")
+                        print(f"    ⚠️  Skip: {str(e)[:80]}")
                 
             except Exception as e:
                 print(f"❌ Error loading Wan models: {e}")
@@ -298,7 +336,14 @@ class MoChALoRALightning(pl.LightningModule):
         # ===== LATENT CACHING =====
         if batch["needs_cache"][0]:
             video = batch["video"].to(device)
-            print(f"[Batch {batch_idx}] Caching latent...")
+            print(f"[Batch {batch_idx}] Encoding video to latents...")
+            
+            if self.pipe.vae is None:
+                raise RuntimeError(
+                    "VAE not loaded! Videos must be pre-encoded before training.\n"
+                    "Add a pre-encoding step after load_models()."
+                )
+            
             with torch.no_grad():
                 latents = self.pipe.vae.encode(video, device=device)
             torch.save(latents.cpu(), batch["latent_path"][0])
@@ -434,6 +479,11 @@ def main():
     )
     
     print(f"✓ Dataset loaded: {len(dataset)} samples\n")
+    
+    # Pre-encode videos to latents (saves GPU memory during training)
+    # Get device from the loaded model
+    model_device = next(model.pipe.dit.parameters()).device if model.pipe and model.pipe.dit else torch.device("cpu")
+    preencode_videos_to_latents(model, dataset, args.latent_dir, model_device)
     
     # Setup trainer
     use_gpu = (not args.no_gpu) and torch.cuda.is_available()
