@@ -15,10 +15,20 @@ def setup_dependencies():
     print("Installing dependencies...")
     subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "torch", "torchvision", "torchaudio", "--index-url", "https://download.pytorch.org/whl/cu118"])
     subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "lightning", "peft", "diffusers", "huggingface-hub", "pillow", "imageio", "pandas", "einops"])
+    
+    # Install diffsynth from current repo in editable mode
+    current_dir = os.getcwd()
+    if os.path.exists(os.path.join(current_dir, "setup.py")) or os.path.exists(os.path.join(current_dir, "diffsynth")):
+        print("Installing diffsynth from local repo...")
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "-e", "."])
+    
     print("✓ Dependencies installed!")
 
 # Install dependencies FIRST
 setup_dependencies()
+
+# Add current directory to path for imports
+sys.path.insert(0, os.getcwd())
 
 # NOW import everything else
 import torch
@@ -199,8 +209,14 @@ class MoChALoRALightning(pl.LightningModule):
         """Load WanVideo MoCha pipeline and inject LoRA"""
         print("Loading WanVideo MoCha pipeline...")
         
-        # Lazy import diffsynth
-        from diffsynth import ModelManager, WanVideoMoChaPipeline
+        # Import here to avoid module not found errors
+        try:
+            from diffsynth import ModelManager, WanVideoMoChaPipeline
+        except ImportError as e:
+            print(f"Error importing diffsynth: {e}")
+            print("Make sure you've cloned the MoCha repo and are in the correct directory")
+            raise
+        
         from peft import LoraConfig, inject_adapter_in_model
         
         device = torch.device("cpu")
@@ -299,6 +315,23 @@ class MoChALoRALightning(pl.LightningModule):
 # MAIN TRAINING FUNCTION
 # =========================
 def main():
+    print("="*60)
+    print("MoCha LoRA Training Setup")
+    print("="*60)
+    
+    # Check if we're in the right directory
+    if not os.path.exists("diffsynth"):
+        print("❌ ERROR: diffsynth folder not found!")
+        print("\nFor Google Colab, use these commands:")
+        print("  !git clone https://github.com/darurat14/mocha.git")
+        print("  %cd mocha")
+        print("  !python train_mocha_colab.py --use_1_3b")
+        sys.exit(1)
+    
+    if not os.path.exists("./data/train_data.csv"):
+        print("⚠️  WARNING: ./data/train_data.csv not found!")
+        print("   Make sure your training data is in ./data/ directory")
+    
     parser = argparse.ArgumentParser(description="MoCha LoRA Training for Colab")
     parser.add_argument("--data_path", type=str, default="./data/train_data.csv", help="Path to training data CSV")
     parser.add_argument("--output_dir", type=str, default="./checkpoints", help="Output directory for checkpoints")
@@ -315,10 +348,7 @@ def main():
     
     args = parser.parse_args()
     
-    # Setup
-    setup_dependencies()
-    
-    # Create output directories
+    # Create output directories FIRST
     os.makedirs(args.output_dir, exist_ok=True)
     os.makedirs(args.latent_dir, exist_ok=True)
     
