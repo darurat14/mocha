@@ -18,7 +18,7 @@ def setup_dependencies():
     print("✓ Dependencies installed!")
 
 # Install dependencies FIRST
-setup_dependencies()
+# setup_dependencies()
 
 # Add current directory to path for imports (diffsynth is in this directory)
 sys.path.insert(0, os.getcwd())
@@ -301,7 +301,19 @@ class MoChALoRALightning(pl.LightningModule):
         
         self.pipe.dit = inject_adapter_in_model(lora_config, self.pipe.dit)
         self.pipe.train()
-        print("✓ Model loaded with LoRA!")
+        
+        # Enable gradient checkpointing to save memory (trade compute for memory)
+        print("Enabling gradient checkpointing...")
+        if hasattr(self.pipe.dit, 'gradient_checkpointing'):
+            self.pipe.dit.gradient_checkpointing = True
+        elif hasattr(self.pipe.dit, 'enable_gradient_checkpointing'):
+            self.pipe.dit.enable_gradient_checkpointing()
+        
+        # Also enable for VAE if available
+        if self.pipe.vae is not None and hasattr(self.pipe.vae, 'enable_gradient_checkpointing'):
+            self.pipe.vae.enable_gradient_checkpointing()
+        
+        print("✓ Model loaded with LoRA and gradient checkpointing!")
 
     def training_step(self, batch, batch_idx):
         device = self.device
