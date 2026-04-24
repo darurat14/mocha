@@ -189,9 +189,9 @@ if __name__ == '__main__':
     #     "./models/Wan2.1-T2V-14B/Wan2.1_VAE.pth",
     # ])
     model_manager.load_models([
-        "./models/diffusion_pytorch_model.safetensors",
-        "./models/models_t5_umt5-xxl-enc-bf16.pth",
-        "./models/Wan2.1_VAE.pth",
+        "./models/wan2.1_1.3b/diffusion_pytorch_model.safetensors",
+        "./models/wan2.1_1.3b/models_t5_umt5-xxl-enc-bf16.pth",
+        "./models/wan2.1_1.3b/Wan2.1_VAE.pth",
     ])
     # Detect device: prefer CUDA/ROCm if available, else CPU
     if torch.cuda.is_available():

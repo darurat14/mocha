@@ -1,4 +1,5 @@
 # Model Files (Large - Don't Push)
+wan2.1_1.3b/
 checkpoints/
 *.pth
 *.pt

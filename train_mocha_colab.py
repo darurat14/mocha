@@ -333,8 +333,9 @@ class MoChALoRALightning(pl.LightningModule):
         # ===== DIFFUSION PROCESS =====
         noise = torch.randn_like(latents)
         
-        # Sample random timestep
-        t_id = torch.randint(0, self.pipe.scheduler.num_train_timesteps, (1,), device="cpu")
+        # Sample random timestep (scale to scheduler's timestep range)
+        num_scheduler_steps = len(self.pipe.scheduler.timesteps)
+        t_id = torch.randint(0, num_scheduler_steps, (1,), device="cpu")
         timestep = self.pipe.scheduler.timesteps[t_id].to(device)
         
         noisy_latents = self.pipe.scheduler.add_noise(latents, noise, timestep)
