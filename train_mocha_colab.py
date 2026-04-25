@@ -450,14 +450,15 @@ class MoChALoRALightning(pl.LightningModule):
 
         num_scheduler_steps = len(self.scheduler.timesteps)
 
+        batch_size = latents.shape[0]
+
+        # MUST be 1D tensor, not scalar
         t_id = torch.randint(
             0,
             num_scheduler_steps,
-            (1,),
+            (batch_size,),
             device="cpu"
-        ).item()
-
-        timestep = self.scheduler.timesteps[t_id].to(gpu_device)
+        )
 
         timestep = self.scheduler.timesteps[t_id].to(gpu_device)
 
