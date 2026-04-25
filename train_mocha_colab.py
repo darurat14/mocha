@@ -116,19 +116,57 @@ class MoChALoRALightning(pl.LightningModule):
         self.runtime_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     def load_models(self):
-        print("Loading models...")
+        print("Loading WanVideo MoCha pipeline...")
 
         from diffsynth.models import ModelManager
         from diffsynth.pipelines import WanVideoMoChaPipeline
         from peft import LoraConfig, inject_adapter_in_model
+        from huggingface_hub import snapshot_download
+        import glob
 
         device = self.runtime_device
         torch_dtype = torch.float32
+
+        if torch.cuda.is_available():
+            print(f"✓ GPU detected: {torch.cuda.get_device_name(0)}")
+        else:
+            print("⚠️ No GPU detected - using CPU")
 
         model_manager = ModelManager(
             torch_dtype=torch_dtype,
             device="cpu"
         )
+
+        print("Loading Wan2.1-T2V-1.3B from HuggingFace...")
+        try:
+            wan_path = snapshot_download(
+                repo_id="Wan-AI/Wan2.1-T2V-1.3B",
+                local_dir="./models/wan2.1_1.3b"
+            )
+
+            model_files = glob.glob(os.path.join(wan_path, "*.safetensors")) + \
+                         glob.glob(os.path.join(wan_path, "*.pth"))
+
+            print(f"Found {len(model_files)} model file(s)")
+
+            for model_file in model_files:
+                if "t5" in model_file.lower() or "text_encoder" in model_file.lower():
+                    print(f"Skipping: {os.path.basename(model_file)}")
+                    continue
+
+                try:
+                    print(f"Loading: {os.path.basename(model_file)}")
+                    model_manager.load_model(
+                        model_file,
+                        device="cpu",
+                        torch_dtype=torch_dtype
+                    )
+                except Exception as e:
+                    print(f"Skip: {str(e)[:80]}")
+
+        except Exception as e:
+            print(f"Error loading Wan models: {e}")
+            raise
 
         pipe = WanVideoMoChaPipeline.from_model_manager(
             model_manager,
