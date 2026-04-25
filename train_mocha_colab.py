@@ -387,60 +387,64 @@ class MoChALoRALightning(pl.LightningModule):
         print("✓ Model loaded with LoRA and gradient checkpointing!")
 
     def training_step(self, batch, batch_idx):
-        device = self.device
+        gpu_device = self.device  # training GPU
 
         # =====================================================
-        # ENCODE VIDEO TO LATENTS (force VAE encode on CPU)
+        # ENCODE VIDEO TO LATENTS (STRICT CPU MODE)
         # =====================================================
         if batch["needs_cache"][0]:
 
             print(f"[Batch {batch_idx}] Encoding video to latents on CPU...")
 
             if self.vae is None:
-                raise RuntimeError("VAE not loaded! Cannot encode video to latents.")
+                raise RuntimeError("VAE not loaded!")
 
-            # -------------------------------------------------
-            # CRITICAL FIX:
-            # Wan VAE Conv3D must run on CPU
-            # -------------------------------------------------
-
-            # Move VAE to CPU
-            self.vae.to(device)
+            # -----------------------------------
+            # FORCE VAE TO CPU
+            # -----------------------------------
+            self.vae.to("cpu")
             self.vae.eval()
             self.vae.requires_grad_(False)
 
-            # Move VIDEO to CPU too
+            # -----------------------------------
+            # MOVE VIDEO TO CPU
+            # -----------------------------------
             video = batch["video"].cpu()
 
             # Match dtype with VAE
             vae_dtype = next(self.vae.parameters()).dtype
             video = video.to(dtype=vae_dtype)
 
-            # Encode on CPU only
+            # -----------------------------------
+            # CPU ONLY ENCODE
+            # -----------------------------------
             with torch.no_grad():
-                latents = self.vae.encode(video, device=device)
+                latents = self.vae.encode(
+                    video,
+                    device="cpu"   # <- MUST BE STRING "cpu"
+                )
 
-            # Move latents back to GPU for training
-            latents = latents.to(device)
+            # -----------------------------------
+            # MOVE LATENTS TO GPU FOR TRAINING
+            # -----------------------------------
+            latents = latents.to(gpu_device)
 
-            # Try saving cached latents
+            # Save cache
             try:
                 torch.save(latents.cpu(), batch["latent_path"][0])
             except Exception as e:
-                print(f"Warning: could not save latent cache: {e}")
+                print(f"Cache save warning: {e}")
 
         else:
-            # -------------------------------------------------
-            # Load cached latent
-            # -------------------------------------------------
-            latents = torch.load(batch["latent_path"][0]).to(device)
+            latents = torch.load(
+                batch["latent_path"][0]
+            ).to(gpu_device)
 
         # =====================================================
-        # DIFFUSION PROCESS
+        # DIFFUSION
         # =====================================================
         noise = torch.randn_like(latents)
 
-        # Make sure scheduler timesteps exist
         if not hasattr(self.scheduler, "timesteps") or len(self.scheduler.timesteps) == 0:
             self.scheduler.set_timesteps(1000)
 
@@ -450,10 +454,10 @@ class MoChALoRALightning(pl.LightningModule):
             0,
             num_scheduler_steps,
             (1,),
-            device=device
+            device=gpu_device
         )
 
-        timestep = self.scheduler.timesteps[t_id].to(device)
+        timestep = self.scheduler.timesteps[t_id].to(gpu_device)
 
         noisy_latents = self.scheduler.add_noise(
             latents,
@@ -461,58 +465,44 @@ class MoChALoRALightning(pl.LightningModule):
             timestep
         )
 
-        # =====================================================
-        # FORWARD PASS
-        # =====================================================
-
         batch_size = noisy_latents.shape[0]
 
-        # Empty text context (since text encoder skipped)
         context = torch.zeros(
             batch_size,
             1,
             4096,
-            device=device,   # IMPORTANT: same device as model
+            device=gpu_device,
             dtype=noisy_latents.dtype
         )
 
-        # Forward through DiT
         noise_pred = self.dit(
             noisy_latents,
             timestep,
             context
         )
 
-        # =====================================================
-        # LOSS
-        # =====================================================
         loss = torch.nn.functional.mse_loss(
             noise_pred.float(),
             noise.float()
         )
 
-        self.log(
-            "train_loss",
-            loss,
-            prog_bar=True
-        )
+        self.log("train_loss", loss, prog_bar=True)
 
         return loss
-
-    def configure_optimizers(self):
-        trainable_params = []
-        
-        for name, param in self.dit.named_parameters():
-            if "lora" in name:
-                param.requires_grad = True
-                trainable_params.append(param)
-            else:
-                param.requires_grad = False
-        
-        num_params = sum(p.numel() for p in trainable_params)
-        print(f"✓ Trainable LoRA params: {num_params:,}")
-        
-        return torch.optim.AdamW(trainable_params, lr=self.learning_rate)
+        def configure_optimizers(self):
+            trainable_params = []
+            
+            for name, param in self.dit.named_parameters():
+                if "lora" in name:
+                    param.requires_grad = True
+                    trainable_params.append(param)
+                else:
+                    param.requires_grad = False
+            
+            num_params = sum(p.numel() for p in trainable_params)
+            print(f"✓ Trainable LoRA params: {num_params:,}")
+            
+            return torch.optim.AdamW(trainable_params, lr=self.learning_rate)
 
 
 # =========================
@@ -621,7 +611,7 @@ def main():
     
     # Setup trainer
     use_gpu = (not args.no_gpu) and torch.cuda.is_available()
-    accelerator = "gpu" if use_gpu else device
+    accelerator = "gpu" if use_gpu else "cpu"
     devices = 1  # Always 1 device (single GPU or single CPU)
     print(f"Training on: {accelerator.upper()}")
     if use_gpu:
