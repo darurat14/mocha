@@ -454,8 +454,10 @@ class MoChALoRALightning(pl.LightningModule):
             0,
             num_scheduler_steps,
             (1,),
-            device=gpu_device
-        )
+            device="cpu"
+        ).item()
+
+        timestep = self.scheduler.timesteps[t_id].to(gpu_device)
 
         timestep = self.scheduler.timesteps[t_id].to(gpu_device)
 
