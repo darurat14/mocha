@@ -616,7 +616,7 @@ def main():
     
     # Pre-encode videos to latents (saves GPU memory during training)
     # Get device from the loaded model
-    model_device = next(model.dit.parameters()).device if model.pipe and model.pipe.dit else torch.device(device)
+    model_device = next(model.dit.parameters()).device if model.pipe and model.pipe.dit else torch.device("cpu")
     preencode_videos_to_latents(model, dataset, args.latent_dir, model_device)
     
     # Setup trainer
