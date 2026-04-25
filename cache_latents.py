@@ -73,18 +73,18 @@ snapshot_download(
 
 manager = ModelManager(
     torch_dtype=torch.float16,
-    device="cpu"
+    device="cuda"
 )
 
 manager.load_model(
     "./models/wan2.1_1.3b/Wan2.1_VAE.pth",
-    device="cpu",
+    device="cuda",
     torch_dtype=torch.float16
 )
 
 pipe = WanVideoMoChaPipeline.from_model_manager(
     manager,
-    device="cpu"
+    device="cuda"
 )
 
 vae = pipe.vae
@@ -110,7 +110,7 @@ for idx, row in metadata.iterrows():
     video = video.to(dtype=vae_dtype)
 
     with torch.no_grad():
-        latent = vae.encode(video, device="cpu")
+        latent = vae.encode(video, device="cuda")
 
     torch.save(latent.cpu(), save_path)
 
