@@ -17,6 +17,7 @@ from einops import rearrange
 
 import lightning as pl
 from lightning.pytorch.callbacks import ModelCheckpoint
+torch.set_float32_matmul_precision("medium")
 
 
 class LatentDataset(Dataset):
@@ -95,6 +96,23 @@ class VideoRefDataset(Dataset):
         video = self.load_video(self.video_paths[idx])
         return {"video": video}
 
+class SafeDataLoader:
+    def __init__(self, dl):
+        self.dl = dl
+
+        # manually compute safe length
+        dataset_len = len(dl.dataset)
+        batch_size = dl.batch_size or 1
+
+        self._length = dataset_len // batch_size
+        if dataset_len % batch_size != 0:
+            self._length += 1
+
+    def __iter__(self):
+        return iter(self.dl)
+
+    def __len__(self):
+        return self._length
 
 class MoChALoRALightning(pl.LightningModule):
     def __init__(self, learning_rate=1e-4, lora_rank=8, lora_alpha=16):
@@ -133,8 +151,8 @@ class MoChALoRALightning(pl.LightningModule):
         print("Loading Wan2.1-T2V-1.3B from HuggingFace...")
         try:
             wan_path = snapshot_download(
-                repo_id="cerspense/zeroscope_v2_576w",
-                local_dir="./models/zeroscope_v2_576w"
+                repo_id="Wan-AI/Wan2.1-T2V-1.3B",
+                local_dir="./models/wan2.1_1.3b"
             )
 
             model_files = glob.glob(os.path.join(wan_path, "*.safetensors")) + \
@@ -323,7 +341,7 @@ def main():
         dataset,
         batch_size=args.batch_size,
         shuffle=True,
-        num_workers=0,
+        num_workers=11,
     )
 
     # IMPORTANT FIX
@@ -341,16 +359,27 @@ def main():
     trainer = pl.Trainer(
         max_epochs=args.num_epochs,
         max_steps=args.max_steps,
+
         accelerator="gpu" if torch.cuda.is_available() else "cpu",
         devices=1,
+
         callbacks=[checkpoint_callback],
+
         precision="16-mixed",
+
         logger=False,
         enable_model_summary=False,
+
         num_sanity_val_steps=0,
+
+        enable_progress_bar=False,
+
+        limit_train_batches=args.max_steps,
     )
 
-    trainer.fit(model, dataloader)
+    safe_loader = SafeDataLoader(dataloader)
+
+    trainer.fit(model, safe_loader)
 
     final_dir = os.path.join(args.output_dir, "lora_final")
     os.makedirs(final_dir, exist_ok=True)
