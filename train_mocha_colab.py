@@ -483,11 +483,11 @@ class MoChALoRALightning(pl.LightningModule):
 
         torch.cuda.empty_cache()
         with torch.autocast("cuda", dtype=torch.float16):
-        noise_pred = self.dit(
-            noisy_latents,
-            timestep,
-            context
-        )
+            noise_pred = self.dit(
+                noisy_latents,
+                timestep,
+                context
+            )
 
         loss = torch.nn.functional.mse_loss(
             noise_pred.float(),
