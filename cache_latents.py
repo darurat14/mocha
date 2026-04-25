@@ -61,7 +61,7 @@ def load_video(path):
     frames = rearrange(frames, "t c h w -> c t h w")
 
     frames = frames.unsqueeze(0)
-    return framesreturn frames
+    return frames
 
 
 print("Loading VAE only...")
