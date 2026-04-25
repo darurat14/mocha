@@ -23,9 +23,7 @@ os.makedirs(LATENT_DIR, exist_ok=True)
 
 
 def is_image(path):
-    return path.lower().endswith(
-        (".jpg", ".jpeg", ".png", ".webp")
-    )
+    return path.lower().endswith((".jpg", ".jpeg", ".png", ".webp"))
 
 
 transform = v2.Compose([
@@ -95,10 +93,7 @@ vae.eval()
 metadata = pd.read_csv(DATA_PATH)
 
 for idx, row in metadata.iterrows():
-    save_path = os.path.join(
-        LATENT_DIR,
-        f"{idx}.pt"
-    )
+    save_path = os.path.join(LATENT_DIR, f"{idx}.pt")
 
     if os.path.exists(save_path):
         print(f"Skip {idx}")
@@ -106,22 +101,16 @@ for idx, row in metadata.iterrows():
 
     print(f"Encoding {idx}")
 
-    video = item["video"]
+    video_path = row["source_video"]   # <-- FIX HERE
+    video = load_video(video_path)
 
-    # IMPORTANT FIX
+    # dtype match fix
     vae_dtype = next(vae.parameters()).dtype
-
-    video = video.to(
-        device="cpu",
-        dtype=vae_dtype
-    )
+    video = video.to(dtype=vae_dtype)
 
     with torch.no_grad():
-        latent = vae.encode(
-            video,
-            device="cpu"
-        )
+        latent = vae.encode(video, device="cpu")
 
-    torch.save(latent.cpu(), f"./latents/{idx}.pt")
+    torch.save(latent.cpu(), save_path)
 
 print("Latent caching complete.")
