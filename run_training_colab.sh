@@ -146,12 +146,14 @@ echo
 echo "Environment ready."
 echo
 cd /home/jay/ai/MoCha
-/home/jay/ai/MoCha/.env-rocm/bin/python train_mocha_colab.py \
-    --data_path ./data/train_data.csv \
-    --output_dir ./checkpoints \
-    --num_epochs 1 \
-    --max_steps 2 \
-    --learning_rate 1e-4 \
-    --use_1_3b \
-    --num_frames 24 \
-    --batch_size 1
+# /home/jay/ai/MoCha/.env-rocm/bin/python train_mocha_colab.py \
+#     --data_path ./data/train_data.csv \
+#     --output_dir ./checkpoints \
+#     --num_epochs 1 \
+#     --max_steps 2 \
+#     --learning_rate 1e-4 \
+#     --use_1_3b \
+#     --num_frames 24 \
+#     --batch_size 1
+
+/home/jay/ai/MoCha/.env-rocm/bin/python cache_latents.py
