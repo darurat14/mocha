@@ -30,7 +30,7 @@ class T5LayerNorm(nn.Module):
     def forward(self, x):
         x = x * torch.rsqrt(x.float().pow(2).mean(dim=-1, keepdim=True) +
                             self.eps)
-        if self.weight.dtype in [torch.float16, torch.bfloat16]:
+        if self.weight.dtype in [torch.float16, torch.float32]:
             x = x.type_as(self.weight)
         return self.weight * x
 

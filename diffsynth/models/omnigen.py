@@ -704,7 +704,7 @@ class OmniGenTransformer(OmniGenOriginalModel):
             "rope_theta": 10000.0,
             "sliding_window": 131072,
             "tie_word_embeddings": False,
-            "torch_dtype": "bfloat16",
+            "torch_dtype": "float32",
             "transformers_version": "4.38.1",
             "use_cache": True,
             "vocab_size": 32064,

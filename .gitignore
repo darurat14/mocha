@@ -1,5 +1,6 @@
 # Model Files (Large - Don't Push)
 wan2.1_1.3b/
+zeroscope_v2_576w/
 checkpoints/
 *.pth
 *.pt

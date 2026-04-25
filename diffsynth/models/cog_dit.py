@@ -330,7 +330,7 @@ class CogDiT(torch.nn.Module):
     
 
     @staticmethod
-    def from_pretrained(file_path, torch_dtype=torch.bfloat16):
+    def from_pretrained(file_path, torch_dtype=torch.float32):
         model = CogDiT().to(torch_dtype)
         state_dict = load_state_dict_from_folder(file_path, torch_dtype=torch_dtype)
         state_dict = CogDiT.state_dict_converter().from_diffusers(state_dict)

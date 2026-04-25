@@ -17,7 +17,7 @@ from .model import CLIPTextCfg, CLIPVisionCfg, _build_vision_tower, _build_text_
 try:
     from transformers import (
         BeamSearchScorer,
-        LogitsProcessorList,
+        LogitsProcessor,
         TopPLogitsWarper,
         TopKLogitsWarper,
         RepetitionPenaltyLogitsProcessor,
@@ -59,7 +59,7 @@ def _build_text_decoder_tower(
     multimodal_cfg = MultimodalCfg(**multimodal_cfg) if isinstance(multimodal_cfg, dict) else multimodal_cfg
     act_layer = QuickGELU if quick_gelu else nn.GELU
     norm_layer = (
-        LayerNormFp32 if cast_dtype in (torch.float16, torch.bfloat16) else LayerNorm
+        LayerNormFp32 if cast_dtype in (torch.float16, torch.float32) else LayerNorm
     )
 
     decoder = MultimodalTransformer(
@@ -193,7 +193,7 @@ class CoCa(nn.Module):
             sot_token_id = 49406 if sot_token_id is None else sot_token_id
             eos_token_id = 49407 if eos_token_id is None else eos_token_id
             pad_token_id = self.pad_id if pad_token_id is None else pad_token_id
-            logit_processor = LogitsProcessorList(
+            logit_processor = LogitsProcessor(
                 [
                     MinLengthLogitsProcessor(min_seq_len, eos_token_id),
                     RepetitionPenaltyLogitsProcessor(repetition_penalty),
@@ -315,7 +315,7 @@ class CoCa(nn.Module):
         )
         # instantiate logits processors
         logits_processor = (
-            LogitsProcessorList([MinLengthLogitsProcessor(min_seq_len, eos_token_id=eos_token_id)])
+            LogitsProcessor([MinLengthLogitsProcessor(min_seq_len, eos_token_id=eos_token_id)])
             if logit_processor is None
             else logit_processor
         )

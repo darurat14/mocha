@@ -39,6 +39,54 @@ from einops import rearrange
 import lightning as pl
 from lightning.pytorch.callbacks import ModelCheckpoint
 
+# =========================
+# ROCm/HIP Compatibility - Critical Monkey Patches
+# =========================
+if torch.cuda.is_available():
+    # Set mixed precision for AMD GPUs
+    try:
+        torch.set_float32_matmul_precision('medium')
+    except:
+        pass
+    
+    # Additional HIP environment variables
+    os.environ.setdefault('AMD_SERIALIZE_KERNEL', '1')
+    os.environ.setdefault('TORCH_USE_HIP_DSA', '1')
+    os.environ.setdefault('HIP_DEVICE_WAIT_MODE', '0')
+    
+    # # Patch the fit_loop to avoid HIP errors in dataloader validation
+    # import lightning.pytorch.loops.fit_loop
+    
+    # original_setup_data = lightning.pytorch.loops.fit_loop._FitLoop.setup_data
+    # original_advance = lightning.pytorch.loops.fit_loop._FitLoop.advance
+    
+    # def setup_data_patched(self):
+    #     """Patched setup_data that handles HIP errors gracefully"""
+    #     try:
+    #         return original_setup_data(self)
+    #     except RuntimeError as e:
+    #         error_msg = str(e)
+    #         if "HIP error" in error_msg or "hipError" in error_msg:
+    #             print(f"⚠️  ROCm HIP error during data setup: {error_msg[:100]}")
+    #             print(f"   Continuing anyway (ROCm compatibility workaround)")
+    #             return  # Just suppress the error and continue
+    #         raise
+    
+    # def advance_patched(self):
+    #     """Patched advance that handles _data_fetcher assertion errors"""
+    #     try:
+    #         return original_advance(self)
+    #     except AssertionError as e:
+    #         if "_data_fetcher is not None" in str(e):
+    #             print(f"⚠️  Data fetcher not initialized - skipping validation")
+    #             print(f"   Training will use dataloader directly (ROCm workaround)")
+    #             # Skip the assertion - the training loop will still work with the wrapped dataloader
+    #             return
+    #         raise
+    
+    # lightning.pytorch.loops.fit_loop._FitLoop.setup_data = setup_data_patched
+    # lightning.pytorch.loops.fit_loop._FitLoop.advance = advance_patched
+
 
 # =========================
 # PRE-ENCODING HELPER
@@ -227,14 +275,22 @@ class MoChALoRALightning(pl.LightningModule):
         if torch.cuda.is_available():
             device = torch.device("cuda")
             print(f"✓ GPU detected: {torch.cuda.get_device_name(0)}")
-            torch_dtype = torch.bfloat16  # GPU supports mixed precision
+
+            # Polaris safe mode
+            torch_dtype = torch.float32
+
+            # Required for old AMD GPUs
+            os.environ["ROC_ENABLE_PRE_VEGA"] = "1"
+            os.environ["HSA_OVERRIDE_GFX_VERSION"] = "8.0.3"
+            os.environ["HSA_ENABLE_SDMA"] = "0"
+            os.environ["HSA_NO_SCRATCH_RECLAIM"] = "1"
+            os.environ["AMD_SERIALIZE_KERNEL"] = "3"
         else:
             device = torch.device("cpu")
             print("⚠️  No GPU detected - using CPU (training will be SLOW)")
-            print("    Tip: In Colab, enable GPU via Runtime > Change runtime type")
             torch_dtype = torch.float32
         
-        model_manager = ModelManager(torch_dtype=torch_dtype, device=device)
+        model_manager = ModelManager(torch_dtype=torch_dtype, device="cpu")
         
         if self.use_1_3b:
             print("Loading Wan2.1-T2V-1.3B from HuggingFace...")
@@ -266,7 +322,7 @@ class MoChALoRALightning(pl.LightningModule):
                     
                     try:
                         print(f"  Loading: {os.path.basename(model_file)}")
-                        model_manager.load_model(model_file, device=device, torch_dtype=torch_dtype)
+                        model_manager.load_model(model_file, device="cpu", torch_dtype=torch_dtype)
                     except Exception as e:
                         print(f"    ⚠️  Skip: {str(e)[:80]}")
                 
@@ -283,10 +339,25 @@ class MoChALoRALightning(pl.LightningModule):
             raise ValueError("14B model not supported in Colab mode. Use --use_1_3b")
         
         print("Creating pipeline...")
-        self.pipe = WanVideoMoChaPipeline.from_model_manager(model_manager, device=device)
-        
-        # Freeze base model
-        self.pipe.requires_grad_(False)
+        # self.pipe = WanVideoMoChaPipeline.from_model_manager(model_manager, device="cpu")
+        pipe = WanVideoMoChaPipeline.from_model_manager(
+            model_manager,
+            device="cpu"
+        )
+
+        self.dit = pipe.dit
+        self.vae = pipe.vae
+        self.scheduler = pipe.scheduler
+
+        # Freeze base model manually
+        self.dit.requires_grad_(False)
+
+        if self.vae is not None:
+            self.vae.requires_grad_(False)
+            self.vae.to("cpu")
+
+        # delete heavy pipeline object so Lightning won't move it
+        del pipe
         
         # Inject LoRA
         print("Injecting LoRA adapters...")
@@ -299,19 +370,19 @@ class MoChALoRALightning(pl.LightningModule):
             task_type="FEATURE_EXTRACTION",
         )
         
-        self.pipe.dit = inject_adapter_in_model(lora_config, self.pipe.dit)
-        self.pipe.train()
+        self.dit = inject_adapter_in_model(lora_config, self.dit)
+        self.dit.train()
         
         # Enable gradient checkpointing to save memory (trade compute for memory)
         print("Enabling gradient checkpointing...")
-        if hasattr(self.pipe.dit, 'gradient_checkpointing'):
-            self.pipe.dit.gradient_checkpointing = True
-        elif hasattr(self.pipe.dit, 'enable_gradient_checkpointing'):
-            self.pipe.dit.enable_gradient_checkpointing()
+        if hasattr(self.dit, 'gradient_checkpointing'):
+            self.dit.gradient_checkpointing = True
+        elif hasattr(self.dit, 'enable_gradient_checkpointing'):
+            self.dit.enable_gradient_checkpointing()
         
         # Also enable for VAE if available
-        if self.pipe.vae is not None and hasattr(self.pipe.vae, 'enable_gradient_checkpointing'):
-            self.pipe.vae.enable_gradient_checkpointing()
+        if self.vae is not None and hasattr(self.vae, 'enable_gradient_checkpointing'):
+            self.vae.enable_gradient_checkpointing()
         
         print("✓ Model loaded with LoRA and gradient checkpointing!")
 
@@ -324,19 +395,19 @@ class MoChALoRALightning(pl.LightningModule):
             video = batch["video"].to(device)
             print(f"[Batch {batch_idx}] Encoding video to latents...")
             
-            if self.pipe.vae is None:
+            if self.vae is None:
                 raise RuntimeError("VAE not loaded! Cannot encode video to latents.")
             
             # Cast to correct dtype
-            vae_dtype = next(self.pipe.vae.parameters()).dtype
+            vae_dtype = next(self.vae.parameters()).dtype
             video = video.to(dtype=vae_dtype)
             
             with torch.no_grad():
-                latents = self.pipe.vae.encode(video, device=device)
+                latents = self.vae.encode(video, device="cpu")
             
             # Move VAE to CPU to free GPU memory for training
-            self.pipe.vae.to("cpu")
-            torch.cuda.empty_cache()
+            self.vae.to("cpu")
+            self.vae.requires_grad_(False)
             
             # Try to save for next epoch
             try:
@@ -351,19 +422,19 @@ class MoChALoRALightning(pl.LightningModule):
         noise = torch.randn_like(latents)
         
         # Sample random timestep (scale to scheduler's timestep range)
-        num_scheduler_steps = len(self.pipe.scheduler.timesteps)
+        num_scheduler_steps = len(self.scheduler.timesteps)
         t_id = torch.randint(0, num_scheduler_steps, (1,), device="cpu")
-        timestep = self.pipe.scheduler.timesteps[t_id].to(device)
+        timestep = self.scheduler.timesteps[t_id].to(device)
         
-        noisy_latents = self.pipe.scheduler.add_noise(latents, noise, timestep)
+        noisy_latents = self.scheduler.add_noise(latents, noise, timestep)
         
         # ===== FORWARD PASS =====
         # Create empty context (text encoder not loaded to save GPU memory)
         batch_size = noisy_latents.shape[0]
-        context = torch.zeros(batch_size, 1, 4096, device=device, dtype=noisy_latents.dtype)
+        context = torch.zeros(batch_size, 1, 4096, device="cpu", dtype=noisy_latents.dtype)
         
         # Call WanModel forward with positional args: (noisy_latents, timestep, context)
-        noise_pred = self.pipe.dit(noisy_latents, timestep, context)
+        noise_pred = self.dit(noisy_latents, timestep, context)
         
         loss = torch.nn.functional.mse_loss(noise_pred.float(), noise.float())
         self.log("train_loss", loss, prog_bar=True)
@@ -373,7 +444,7 @@ class MoChALoRALightning(pl.LightningModule):
     def configure_optimizers(self):
         trainable_params = []
         
-        for name, param in self.pipe.dit.named_parameters():
+        for name, param in self.dit.named_parameters():
             if "lora" in name:
                 param.requires_grad = True
                 trainable_params.append(param)
@@ -487,7 +558,7 @@ def main():
     
     # Pre-encode videos to latents (saves GPU memory during training)
     # Get device from the loaded model
-    model_device = next(model.pipe.dit.parameters()).device if model.pipe and model.pipe.dit else torch.device("cpu")
+    model_device = next(model.dit.parameters()).device if model.pipe and model.pipe.dit else torch.device("cpu")
     preencode_videos_to_latents(model, dataset, args.latent_dir, model_device)
     
     # Setup trainer
@@ -508,32 +579,85 @@ def main():
         mode="min",
     )
     
-    trainer = pl.Trainer(
+    # Create a custom Trainer with HIP error handling
+    class RoCmTrainer(pl.Trainer):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+        
+        def fit(self, model, train_dataloaders=None, val_dataloaders=None, datamodule=None, ckpt_path=None):
+            """Override fit to handle HIP errors gracefully"""
+            # Wrap dataloader to avoid HIP errors in length checks
+            if train_dataloaders is not None and not isinstance(train_dataloaders, (list, tuple)):
+                try:
+                    # Try to get length safely
+                    dataset_len = len(train_dataloaders.dataset)
+                    loader_len = (dataset_len + train_dataloaders.batch_size - 1) // train_dataloaders.batch_size
+                    
+                    # Create safe wrapper
+                    class SafeDataLoader:
+                        def __init__(self, dl, length):
+                            self.dl = dl
+                            self._length = length
+                        
+                        def __iter__(self):
+                            return iter(self.dl)
+                        
+                        def __len__(self):
+                            return self._length
+                    
+                    train_dataloaders = SafeDataLoader(train_dataloaders, loader_len)
+                except:
+                    pass
+            
+            return super().fit(model, train_dataloaders, val_dataloaders, datamodule, ckpt_path)
+    
+    trainer = RoCmTrainer(
         max_epochs=args.num_epochs,
         max_steps=args.max_steps,
         accelerator=accelerator,
         devices=devices,
         callbacks=[checkpoint_callback],
         log_every_n_steps=10,
-        enable_progress_bar=True,
-        precision="16-mixed" if use_gpu else "32",  # Mixed precision for GPU
+        enable_progress_bar=True,  # Disable progress bar for ROCm compatibility
+        num_sanity_val_steps=0,  # Skip sanity validation
+        precision="32",
+        enable_model_summary=False,  # Reduce overhead
+        logger=False,  # Disable logging for now
+        limit_train_batches=args.max_steps,  # Limit batches to avoid dataloader length check
     )
+    
+    # Wrap dataloader for ROCm compatibility
+    # Create a wrapper that safely handles len() calls without triggering HIP errors
+    class DataLoaderWrapper:
+        def __init__(self, dl):
+            self.dl = dl
+            self._len = len(dl.dataset) // dl.batch_size
+            if len(dl.dataset) % dl.batch_size != 0:
+                self._len += 1
+        
+        def __iter__(self):
+            return iter(self.dl)
+        
+        def __len__(self):
+            return self._len
+    
+    wrapped_dataloader = DataLoaderWrapper(dataloader)
     
     # Train
     print("\nStarting training...\n")
-    trainer.fit(model, dataloader)
+    trainer.fit(model, wrapped_dataloader)
     
     # Save LoRA weights
     print("\nSaving LoRA weights...")
     final_dir = os.path.join(args.output_dir, "lora_final")
     os.makedirs(final_dir, exist_ok=True)
     
-    model.pipe.dit.save_pretrained(final_dir)
+    model.dit.save_pretrained(final_dir)
     
     torch.save(
         {
             name: p.cpu()
-            for name, p in model.pipe.dit.named_parameters()
+            for name, p in model.dit.named_parameters()
             if "lora" in name
         },
         os.path.join(args.output_dir, "lora_weights_final.pth"),

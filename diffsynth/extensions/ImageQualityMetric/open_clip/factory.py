@@ -225,7 +225,7 @@ def create_model(
 
         model.to(device=device)
         if precision in ("fp16", "bf16"):
-            convert_weights_to_lp(model, dtype=torch.bfloat16 if precision == 'bf16' else torch.float16)
+            convert_weights_to_lp(model, dtype=torch.float32 if precision == 'bf16' else torch.float16)
 
         # set image / mean metadata from pretrained_cfg if available, or use default
         model.visual.image_mean = pretrained_cfg.get('mean', None) or OPENAI_DATASET_MEAN

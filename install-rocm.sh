@@ -1,52 +1,137 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -e
 
-# Agar GPU Polaris (RX 560) dikenali ROCm
+# =========================================================
+# MoCha + ROCm (Polaris RX 560) Auto Fix for NixOS
+# - Auto detect ROCm libs from /nix/store
+# - Auto replace broken PyTorch bundled libs
+# - Auto create venv if missing
+# - Auto test ROCm
+# =========================================================
+
+cd /home/jay/ai/MoCha
+
+echo "================================"
+echo "Starting MoCha ROCm environment"
+echo "================================"
+
+# =========================================================
+# Polaris compatibility
+# =========================================================
+
 export ROC_ENABLE_PRE_VEGA=1
 export HSA_OVERRIDE_GFX_VERSION=8.0.3
 export HSA_ENABLE_SDMA=0
 export HSA_NO_SCRATCH_RECLAIM=1
 
-
-# NixOS-specific library paths
-export LD_LIBRARY_PATH="/run/current-system/sw/lib:/run/opengl-driver/lib:$(nix eval --raw nixpkgs#openvino)/runtime/lib/intel64:$NIX_LD_LIBRARY_PATH:${LD_LIBRARY_PATH:-}"
+# Optional Vulkan ICD
 export VK_ICD_FILENAMES="/run/opengl-driver/share/vulkan/icd.d/radeon_icd.x86_64.json"
 
-nix-shell -p python311 --run '
+# =========================================================
+# Auto detect ROCm library path
+# =========================================================
 
+ROCM_LIB="$(dirname "$(find /nix/store -name libamdhip64.so 2>/dev/null | grep -v site-packages | head -1)")"
 
-echo "================================"
-cd /home/jay/ai/MoCha
+if [ -z "$ROCM_LIB" ]; then
+    echo "ERROR: libamdhip64.so not found in /nix/store"
+    exit 1
+fi
+
+echo "Detected ROCm lib path:"
+echo "$ROCM_LIB"
+
+# =========================================================
+# Clean LD_LIBRARY_PATH
+# =========================================================
+
+export LD_LIBRARY_PATH="/run/current-system/sw/lib:/run/opengl-driver/lib:${ROCM_LIB}:${LD_LIBRARY_PATH:-}"
+
+echo
+echo "LD_LIBRARY_PATH="
+echo "$LD_LIBRARY_PATH"
+echo
+
+# =========================================================
+# Create venv if missing
+# =========================================================
 
 if [ ! -d ".env-rocm" ]; then
-    python -m venv .env-rocm --system-site-packages
+    echo "Creating Python virtual environment..."
 
-
-    source .env-rocm/bin/activate
-
-    # Agar GPU Polaris (RX 560) dikenali ROCm
-    export ROC_ENABLE_PRE_VEGA=1
-    export HSA_OVERRIDE_GFX_VERSION=8.0.3
-    export HSA_ENABLE_SDMA=0
-    export HSA_NO_SCRATCH_RECLAIM=1
-
-
-    # NixOS-specific library paths
-    export LD_LIBRARY_PATH="/run/current-system/sw/lib:/run/opengl-driver/lib:$(nix eval --raw nixpkgs#openvino)/runtime/lib/intel64:$NIX_LD_LIBRARY_PATH:${LD_LIBRARY_PATH:-}"
-    export VK_ICD_FILENAMES="/run/opengl-driver/share/vulkan/icd.d/radeon_icd.x86_64.json"
-
-
-    pip install -r requirements.txt --index-url https://download.pytorch.org/whl/rocm5.7
-    #pip install -r requirements-amd.txt --index-url https://download.pytorch.org/whl/rocm5.7
+    nix-shell -p python311 --run '
+        cd /home/jay/ai/MoCha
+        python -m venv .env-rocm --system-site-packages
+    '
 fi
-'
-echo LD_LIBRARY_PATH
+
+# =========================================================
+# Activate venv
+# =========================================================
+
 source .env-rocm/bin/activate
 
-#python -m pip install --upgrade torch torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/rocm6.0
+TORCH_LIB="$VIRTUAL_ENV/lib/python3.11/site-packages/torch/lib"
 
-python -c "import torch; print('ROCm available:', torch.cuda.is_available()); print('Device:', torch.cuda.get_device_name() if torch.cuda.is_available() else 'CPU')"
+# =========================================================
+# Install dependencies if torch missing
+# =========================================================
 
+if ! python -c "import torch" >/dev/null 2>&1; then
+    echo "Installing PyTorch ROCm packages..."
 
-python -c "import torch; print(f'ROCm available: {torch.cuda.is_available()}'); print(f'Device: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else \"CPU\"}')"
+    pip install -r requirements-amd.txt \
+        --index-url https://download.pytorch.org/whl/rocm5.7
 
-python -c "import torch; print(f'HIP Version: {torch.version.hip}')"
+    pip install -r requirements.txt \
+        --extra-index-url https://download.pytorch.org/whl/rocm5.7
+fi
+
+# =========================================================
+# Auto fix broken PyTorch ROCm libraries
+# =========================================================
+
+echo
+echo "Fixing PyTorch bundled ROCm libraries..."
+
+for lib in libamdhip64.so libhiprtc.so; do
+    SYSTEM_LIB="${ROCM_LIB}/${lib}"
+    TORCH_TARGET="${TORCH_LIB}/${lib}"
+
+    if [ -f "$SYSTEM_LIB" ]; then
+        echo "Replacing: $lib"
+
+        rm -f "$TORCH_TARGET"
+        ln -sf "$SYSTEM_LIB" "$TORCH_TARGET"
+    else
+        echo "WARNING: $SYSTEM_LIB not found"
+    fi
+done
+
+echo
+
+# =========================================================
+# ROCm verification
+# =========================================================
+
+echo "Testing PyTorch + ROCm..."
+
+python - << EOF
+import torch
+
+print("================================")
+print("Torch version:", torch.__version__)
+print("ROCm available:", torch.cuda.is_available())
+print("HIP Version:", torch.version.hip)
+print("Device count:", torch.cuda.device_count())
+
+if torch.cuda.is_available():
+    print("Device:", torch.cuda.get_device_name(0))
+else:
+    print("Device: CPU")
+print("================================")
+EOF
+
+echo
+echo "Environment ready."
+echo

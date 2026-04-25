@@ -86,7 +86,7 @@ def load_openai_model(
         if precision.startswith('amp') or precision == 'fp32':
             model.float()
         elif precision == 'bf16':
-            convert_weights_to_lp(model, dtype=torch.bfloat16)
+            convert_weights_to_lp(model, dtype=torch.float32)
 
         return model
 

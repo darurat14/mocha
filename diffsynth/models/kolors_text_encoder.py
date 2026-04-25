@@ -28,11 +28,12 @@ from transformers.modeling_outputs import (
     CausalLMOutputWithPast,
     SequenceClassifierOutputWithPast,
 )
-from transformers.modeling_utils import PreTrainedModel
+from transformers import PretrainedConfig, PreTrainedModel
 from transformers.utils import logging
 from transformers.generation.logits_process import LogitsProcessor
-from transformers.generation.utils import LogitsProcessorList, StoppingCriteriaList, GenerationConfig, ModelOutput
-from transformers import PreTrainedConfig
+from transformers.generation import StoppingCriteriaList
+from transformers.utils import ModelOutput
+from transformers import GenerationConfig
 from torch.nn.parameter import Parameter
 import bz2
 import torch
@@ -120,13 +121,13 @@ def compress_int4_weight(weight: torch.Tensor):  # (n, m)
 
 
 def extract_weight_to_half(weight: torch.Tensor, scale_list: torch.Tensor, source_bit_width: int):
-    assert scale_list.dtype in [torch.half, torch.bfloat16]
+    assert scale_list.dtype in [torch.half, torch.float32]
     assert weight.dtype in [torch.int8]
     if source_bit_width == 8:
         return weight.to(scale_list.dtype) * scale_list[:, None]
     elif source_bit_width == 4:
         func = (
-            kernels.int4WeightExtractionHalf if scale_list.dtype == torch.half else kernels.int4WeightExtractionBFloat16
+            kernels.int4WeightExtractionHalf if scale_list.dtype == torch.half else kernels.int4WeightExtractionfloat32
         )
     else:
         assert False, "Unsupported bit-width"
@@ -224,7 +225,7 @@ def quantize(model, weight_bit_width, empty_init=False, device=None):
 
 
 
-class ChatGLMConfig(PreTrainedConfig):
+class ChatGLMConfig(PretrainedConfig):
     model_type = "chatglm"
     def __init__(
         self,
@@ -405,8 +406,8 @@ class RotaryEmbedding(nn.Module):
         cache = torch.stack([torch.cos(idx_theta), torch.sin(idx_theta)], dim=-1)
 
         # this is to mimic the behaviour of complex32, else we will get different results
-        if dtype in (torch.float16, torch.bfloat16, torch.int8):
-            cache = cache.bfloat16() if dtype == torch.bfloat16 else cache.half()
+        if dtype in (torch.float16, torch.float32, torch.int8):
+            cache = cache.float32() if dtype == torch.float32 else cache.half()
         return cache
 
     def forward(self, max_seq_len, offset=0):
@@ -1282,7 +1283,7 @@ class ChatGLMForConditionalGeneration(ChatGLMPreTrainedModel):
         if history is None:
             history = []
         if logits_processor is None:
-            logits_processor = LogitsProcessorList()
+            logits_processor = LogitsProcessor()
         logits_processor.append(InvalidScoreLogitsProcessor())
         gen_kwargs = {"max_length": max_length, "num_beams": num_beams, "do_sample": do_sample, "top_p": top_p,
                       "temperature": temperature, "logits_processor": logits_processor, **kwargs}
@@ -1304,7 +1305,7 @@ class ChatGLMForConditionalGeneration(ChatGLMPreTrainedModel):
         if history is None:
             history = []
         if logits_processor is None:
-            logits_processor = LogitsProcessorList()
+            logits_processor = LogitsProcessor()
         logits_processor.append(InvalidScoreLogitsProcessor())
         eos_token_id = [tokenizer.eos_token_id, tokenizer.get_command("<|user|>"),
                         tokenizer.get_command("<|observation|>")]
@@ -1343,7 +1344,7 @@ class ChatGLMForConditionalGeneration(ChatGLMPreTrainedModel):
             self,
             input_ids,
             generation_config: Optional[GenerationConfig] = None,
-            logits_processor: Optional[LogitsProcessorList] = None,
+            logits_processor: Optional[LogitsProcessor] = None,
             stopping_criteria: Optional[StoppingCriteriaList] = None,
             prefix_allowed_tokens_fn: Optional[Callable[[int, torch.Tensor], List[int]]] = None,
             return_past_key_values=False,
@@ -1390,7 +1391,7 @@ class ChatGLMForConditionalGeneration(ChatGLMPreTrainedModel):
             )
 
         # 2. Set generation parameters if not already defined
-        logits_processor = logits_processor if logits_processor is not None else LogitsProcessorList()
+        logits_processor = logits_processor if logits_processor is not None else LogitsProcessor()
         stopping_criteria = stopping_criteria if stopping_criteria is not None else StoppingCriteriaList()
 
         logits_processor = self._get_logits_processor(

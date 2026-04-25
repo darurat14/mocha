@@ -274,7 +274,7 @@ class OmostPromter(torch.nn.Module):
         
         input_ids = self.tokenizer.apply_chat_template(conversation, return_tensors="pt", add_generation_prompt=True).to(self.device)
         streamer = TextIteratorStreamer(self.tokenizer, timeout=10.0, skip_prompt=True, skip_special_tokens=True)
-        attention_mask = torch.ones(input_ids.shape, dtype=torch.bfloat16, device=self.device)
+        attention_mask = torch.ones(input_ids.shape, dtype=torch.float32, device=self.device)
         
         generate_kwargs = dict(
             input_ids = input_ids,

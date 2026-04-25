@@ -66,7 +66,7 @@ class CLIPTextCfg:
 def get_cast_dtype(precision: str):
     cast_dtype = None
     if precision == 'bf16':
-        cast_dtype = torch.bfloat16
+        cast_dtype = torch.float32
     elif precision == 'fp16':
         cast_dtype = torch.float16
     return cast_dtype
@@ -110,7 +110,7 @@ def _build_vision_tower(
         )
     else:
         vision_heads = vision_cfg.width // vision_cfg.head_width
-        norm_layer = LayerNormFp32 if cast_dtype in (torch.float16, torch.bfloat16) else LayerNorm
+        norm_layer = LayerNormFp32 if cast_dtype in (torch.float16, torch.float32) else LayerNorm
         visual = VisionTransformer(
             image_size=vision_cfg.image_size,
             patch_size=vision_cfg.patch_size,
@@ -154,7 +154,7 @@ def _build_text_tower(
         )
     else:
         act_layer = QuickGELU if quick_gelu else nn.GELU
-        norm_layer = LayerNormFp32 if cast_dtype in (torch.float16, torch.bfloat16) else LayerNorm
+        norm_layer = LayerNormFp32 if cast_dtype in (torch.float16, torch.float32) else LayerNorm
 
         text = TextTransformer(
             context_length=text_cfg.context_length,

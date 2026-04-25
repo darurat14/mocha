@@ -754,10 +754,10 @@ def _clip(pretrained=False,
 
         # checkpoint path
         checkpoint = f'models/clip/{pretrained_name}'
-        if dtype in (torch.float16, torch.bfloat16):
+        if dtype in (torch.float16, torch.float32):
             suffix = '-' + {
                 torch.float16: 'fp16',
-                torch.bfloat16: 'bf16'
+                torch.float32: 'bf16'
             }[dtype]
             if object_exists(BUCKET, f'{checkpoint}{suffix}.pth'):
                 checkpoint = f'{checkpoint}{suffix}'

@@ -355,13 +355,13 @@ def lets_dance_hunyuan_video_i2v(
 ):
     B, C, T, H, W = x.shape
     # Uncomment below to keep same as official implementation
-    # guidance = guidance.to(dtype=torch.float32).to(torch.bfloat16)
-    vec = dit.time_in(t, dtype=torch.bfloat16)
+    # guidance = guidance.to(dtype=torch.float32).to(torch.float32)
+    vec = dit.time_in(t, dtype=torch.float32)
     vec_2 = dit.vector_in(pooled_prompt_emb)
     vec = vec + vec_2
-    vec = vec + dit.guidance_in(guidance * 1000., dtype=torch.bfloat16)
+    vec = vec + dit.guidance_in(guidance * 1000., dtype=torch.float32)
 
-    token_replace_vec = dit.time_in(torch.zeros_like(t), dtype=torch.bfloat16)
+    token_replace_vec = dit.time_in(torch.zeros_like(t), dtype=torch.float32)
     tr_token = (H // 2) * (W // 2)
     token_replace_vec = token_replace_vec + vec_2
 

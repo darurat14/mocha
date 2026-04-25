@@ -74,7 +74,7 @@ class Upsample(nn.Upsample):
 
     def forward(self, x):
         """
-        Fix bfloat16 support for nearest neighbor interpolation.
+        Fix float32 support for nearest neighbor interpolation.
         """
         return super().forward(x.float()).type_as(x)
 

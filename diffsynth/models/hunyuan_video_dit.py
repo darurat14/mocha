@@ -220,7 +220,7 @@ class IndividualTokenRefinerBlock(torch.nn.Module):
         )
         self.adaLN_modulation = torch.nn.Sequential(
             torch.nn.SiLU(),
-            torch.nn.Linear(hidden_size, hidden_size * 2, device="cuda", dtype=torch.bfloat16),
+            torch.nn.Linear(hidden_size, hidden_size * 2, device="cuda", dtype=torch.float32),
         )
 
     def forward(self, x, c, attn_mask=None):
@@ -603,7 +603,7 @@ class HunyuanVideoDiT(torch.nn.Module):
         self.final_layer = FinalLayer(hidden_size)
 
         # TODO: remove these parameters
-        self.dtype = torch.bfloat16
+        self.dtype = torch.float32
         self.patch_size = [1, 2, 2]
         self.hidden_size = 3072
         self.heads_num = 24
@@ -661,7 +661,7 @@ class HunyuanVideoDiT(torch.nn.Module):
         return img
 
 
-    def enable_auto_offload(self, dtype=torch.bfloat16, device="cuda"):
+    def enable_auto_offload(self, dtype=torch.float32, device="cuda"):
         def cast_to(weight, dtype=None, device=None, copy=False):
             if device is None or weight.device == device:
                 if not copy:
@@ -696,7 +696,7 @@ class HunyuanVideoDiT(torch.nn.Module):
 
         class quantized_layer:
             class Linear(torch.nn.Linear):
-                def __init__(self, *args, dtype=torch.bfloat16, device="cuda", **kwargs):
+                def __init__(self, *args, dtype=torch.float32, device="cuda", **kwargs):
                     super().__init__(*args, **kwargs)
                     self.dtype = dtype
                     self.device = device
@@ -730,7 +730,7 @@ class HunyuanVideoDiT(torch.nn.Module):
 
 
             class RMSNorm(torch.nn.Module):
-                def __init__(self, module, dtype=torch.bfloat16, device="cuda"):
+                def __init__(self, module, dtype=torch.float32, device="cuda"):
                     super().__init__()
                     self.module = module
                     self.dtype = dtype
@@ -742,12 +742,12 @@ class HunyuanVideoDiT(torch.nn.Module):
                     hidden_states = hidden_states * torch.rsqrt(variance + self.module.eps)
                     hidden_states = hidden_states.to(input_dtype)
                     if self.module.weight is not None:
-                        weight = cast_weight(self.module, hidden_states, dtype=torch.bfloat16, device="cuda")
+                        weight = cast_weight(self.module, hidden_states, dtype=torch.float32, device="cuda")
                         hidden_states = hidden_states * weight
                     return hidden_states
 
             class Conv3d(torch.nn.Conv3d):
-                def __init__(self, *args, dtype=torch.bfloat16, device="cuda", **kwargs):
+                def __init__(self, *args, dtype=torch.float32, device="cuda", **kwargs):
                     super().__init__(*args, **kwargs)
                     self.dtype = dtype
                     self.device = device
@@ -757,7 +757,7 @@ class HunyuanVideoDiT(torch.nn.Module):
                     return torch.nn.functional.conv3d(x, weight, bias, self.stride, self.padding, self.dilation, self.groups)
 
             class LayerNorm(torch.nn.LayerNorm):
-                def __init__(self, *args, dtype=torch.bfloat16, device="cuda", **kwargs):
+                def __init__(self, *args, dtype=torch.float32, device="cuda", **kwargs):
                     super().__init__(*args, **kwargs)
                     self.dtype = dtype
                     self.device = device
@@ -769,7 +769,7 @@ class HunyuanVideoDiT(torch.nn.Module):
                     else:
                         return torch.nn.functional.layer_norm(x, self.normalized_shape, self.weight, self.bias, self.eps)
 
-        def replace_layer(model, dtype=torch.bfloat16, device="cuda"):
+        def replace_layer(model, dtype=torch.float32, device="cuda"):
             for name, module in model.named_children():
                 if isinstance(module, torch.nn.Linear):
                     with init_weights_on_device():

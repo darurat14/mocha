@@ -18,8 +18,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from .stepvideo_dit import RMSNorm
 from safetensors.torch import load_file
-from transformers.configuration_utils import PreTrainedConfig
-from transformers.modeling_utils import PreTrainedModel
+from transformers import PretrainedConfig, PreTrainedModel
 from einops import rearrange
 import json
 from typing import List
@@ -496,7 +495,7 @@ class Transformer(nn.Module):
 
 
 class Step1Model(PreTrainedModel):
-    config_class=PreTrainedConfig
+    config_class=PretrainedConfig
     @with_empty_init
     def __init__(
         self,
@@ -528,16 +527,16 @@ class STEP1TextEncoder(torch.nn.Module):
         self.max_length = max_length
         self.text_tokenizer = Wrapped_StepChatTokenizer(os.path.join(model_dir, 'step1_chat_tokenizer.model'))
         text_encoder = Step1Model.from_pretrained(model_dir)
-        self.text_encoder = text_encoder.eval().to(torch.bfloat16)
+        self.text_encoder = text_encoder.eval().to(torch.float32)
 
     @staticmethod
-    def from_pretrained(path, torch_dtype=torch.bfloat16):
+    def from_pretrained(path, torch_dtype=torch.float32):
         model = STEP1TextEncoder(path).to(torch_dtype)
         return model
         
     def forward(self, prompts, with_mask=True, max_length=None, device="cuda"):
         self.device = device
-        with torch.no_grad(), torch.amp.autocast(dtype=torch.bfloat16, device_type=device):
+        with torch.no_grad(), torch.amp.autocast(dtype=torch.float32, device_type=device):
             if type(prompts) is str:
                 prompts = [prompts]
             

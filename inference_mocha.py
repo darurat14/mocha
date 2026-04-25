@@ -12,6 +12,8 @@ from PIL import Image
 import random
 import numpy as np
 import json
+from huggingface_hub import snapshot_download
+import glob
 
 class VideoRefDataset(torch.utils.data.Dataset):
     def __init__(self, data_path, args, max_num_frames=161, frame_interval=1, num_frames=161, height=480, width=832):
@@ -175,9 +177,26 @@ def parse_args():
 
 if __name__ == '__main__':
     args = parse_args()
+    # Auto-detect GPU or use CPU
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+        print(f"✓ GPU detected: {torch.cuda.get_device_name(0)}")
 
+        # Polaris safe mode
+        torch_dtype = torch.float16
+
+        # Required for old AMD GPUs
+        os.environ["ROC_ENABLE_PRE_VEGA"] = "1"
+        os.environ["HSA_OVERRIDE_GFX_VERSION"] = "8.0.3"
+        os.environ["HSA_ENABLE_SDMA"] = "0"
+        os.environ["HSA_NO_SCRATCH_RECLAIM"] = "1"
+        os.environ["AMD_SERIALIZE_KERNEL"] = "3"
+    else:
+        device = torch.device("cpu")
+        print("⚠️  No GPU detected - using CPU (training will be SLOW)")
+        torch_dtype = torch.float32
     # Load Wan2.1 pre-trained models
-    model_manager = ModelManager(torch_dtype=torch.bfloat16, device="cpu")
+    model_manager = ModelManager(torch_dtype=torch_dtype, device="cpu")
     # model_manager.load_models([
     #     ["./models/diffusion_pytorch_model-00001-of-00006.safetensors",
     #     "./models/diffusion_pytorch_model-00002-of-00006.safetensors",
@@ -188,19 +207,49 @@ if __name__ == '__main__':
     #     "./models/Wan2.1-T2V-14B/models_t5_umt5-xxl-enc-bf16.pth",
     #     "./models/Wan2.1-T2V-14B/Wan2.1_VAE.pth",
     # ])
-    model_manager.load_models([
-        "./models/wan2.1_1.3b/diffusion_pytorch_model.safetensors",
-        "./models/wan2.1_1.3b/models_t5_umt5-xxl-enc-bf16.pth",
-        "./models/wan2.1_1.3b/Wan2.1_VAE.pth",
-    ])
-    # Detect device: prefer CUDA/ROCm if available, else CPU
-    if torch.cuda.is_available():
-        device = "cuda"
-        print("Using GPU (CUDA/ROCm)")
-    else:
-        device = "cpu"
-        print("Using CPU (GPU not available)")
+
+    try:
+        # Download only DiT model (needed for training)
+        print("Downloading Wan2.1-T2V-1.3B DiT...")
+        wan_path = snapshot_download(repo_id="Wan-AI/Wan2.1-T2V-1.3B", local_dir="./models/wan2.1_1.3b")
+        # print("Downloading zeroscope_v2_576w...")
+        # wan_path = snapshot_download(repo_id="cerspense/zeroscope_v2_576w", local_dir="./models/zeroscope_v2_576w")
+        
+        # Find DiT model file
+        dit_files = glob.glob(os.path.join(wan_path, "diffusion_pytorch_model.safetensors"))
+        if not dit_files:
+            dit_files = glob.glob(os.path.join(wan_path, "*.safetensors"))
+        
+        print(f"  ✓ Found {len(dit_files)} DiT model file(s)")
+        
+        # Load ALL model files from the downloaded directory
+        # BUT skip T5 encoder (only needed for inference, not training)
+        print("Loading model components...")
+        model_files = glob.glob(os.path.join(wan_path, "*.safetensors")) + \
+                    glob.glob(os.path.join(wan_path, "*.pth"))
+        
+        print(f"  Found {len(model_files)} model file(s)")
+        for model_file in model_files:
+            # Skip T5 encoder - it's huge and not needed for LoRA training
+            if "t5" in model_file.lower() or "text_encoder" in model_file.lower():
+                print(f"  Skipping: {os.path.basename(model_file)} (not needed for training)")
+                continue
+            
+            try:
+                print(f"  Loading: {os.path.basename(model_file)}")
+                model_manager.load_model(model_file, device="cpu", torch_dtype=torch_dtype)
+            except Exception as e:
+                print(f"    ⚠️  Skip: {str(e)[:80]}")
+        
+    except Exception as e:
+        print(f"❌ Error loading Wan models: {e}")
+        print("This might be due to missing model files. Please ensure:")
+        print("  1. HuggingFace token is set if model is private")
+        print("  2. You have enough disk space (~50GB)")
+        raise
+
     pipe = WanVideoMoChaPipeline.from_model_manager(model_manager, device=device)
+    pipe.enable_cpu_offload()
 
     # Load checkpoint (optional)
     if os.path.exists(args.ckpt_path):
@@ -215,10 +264,10 @@ if __name__ == '__main__':
         print(f"Checkpoint not found at {args.ckpt_path}")
         print("Continuing with base model weights...")
     
-    pipe.to(device)
-    # On CPU, use float32; on CUDA, keep bfloat16 for efficiency
-    target_dtype = torch.float32 if device == "cpu" else torch.bfloat16
-    pipe.to(dtype=target_dtype)
+    # pipe.to(device)
+    # On CPU, use float32; on CUDA, keep float32 for efficiency
+    target_dtype = torch.float32 if device == "cpu" else torch.float32
+    # pipe.to(dtype=target_dtype)
 
 
     output_dir = args.output_dir
@@ -257,9 +306,9 @@ if __name__ == '__main__':
             first_ref=first_ref,
             second_ref=second_ref,
             cfg_scale=args.cfg_scale,
-            num_inference_steps=30,  # Reduce steps for faster CPU inference
-            num_frames=41,  # Reduce frames to save VRAM/RAM (original 81)
+            num_inference_steps=10,  # Reduce steps for faster CPU inference
+            num_frames=21,  # Reduce frames to save VRAM/RAM (original 81)
             seed=0, tiled=True  # Keep tiled for VRAM efficiency
         )
 
-        save_video(video, os.path.join(output_dir, f"{os.path.splitext(cond_path_name)[0]}_replaced.mp4"), fps=30, quality=5)
+        save_video(video, os.path.join(output_dir, f"{os.path.splitext(cond_path_name)[0]}_replaced.mp4"), fps=30, quality=4)

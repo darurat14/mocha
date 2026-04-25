@@ -15,5 +15,6 @@ if [ ! -d ".env-cpu" ]; then
 fi
 
 source .env-cpu/bin/activate
-pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
+pip install -r requirements.txt --index-url https://download.pytorch.org/whl/cpu
+pip install -r requirements-amd.txt --extra-index-url https://download.pytorch.org/whl/cpu
 # pip install transformers==4.41.2 accelerate==0.30.1
