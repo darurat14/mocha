@@ -242,14 +242,23 @@ class MoChALoRALightning(pl.LightningModule):
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--data_path", default="./data/train_data.csv")
-    parser.add_argument("--output_dir", default="./checkpoints")
-    parser.add_argument("--latent_dir", default="./latents")
-    parser.add_argument("--batch_size", type=int, default=1)
-    parser.add_argument("--num_epochs", type=int, default=5)
-    parser.add_argument("--max_steps", type=int, default=1000)
-    parser.add_argument("--learning_rate", type=float, default=1e-4)
+    parser = argparse.ArgumentParser(description="MoCha LoRA Training for Colab")
+    parser.add_argument("--data_path", type=str, default="./data/train_data.csv", help="Path to training data CSV")
+    parser.add_argument("--output_dir", type=str, default="./checkpoints", help="Output directory for checkpoints")
+    parser.add_argument("--latent_dir", type=str, default="./latents", help="Directory for cached latents")
+    parser.add_argument("--batch_size", type=int, default=1, help="Batch size")
+    parser.add_argument("--num_epochs", type=int, default=5, help="Number of epochs")
+    parser.add_argument("--max_steps", type=int, default=1000, help="Max training steps")
+    parser.add_argument("--learning_rate", type=float, default=1e-4, help="Learning rate")
+
+    # compatibility args from original script
+    parser.add_argument("--use_1_3b", action="store_true", help="Compatibility flag (accepted, always uses 1.3B path)")
+    parser.add_argument("--num_frames", type=int, default=24, help="Compatibility flag for dataset/video frames")
+    parser.add_argument("--height", type=int, default=480, help="Video height")
+    parser.add_argument("--width", type=int, default=832, help="Video width")
+    parser.add_argument("--num_workers", type=int, default=0, help="Number of dataloader workers")
+    parser.add_argument("--no_gpu", action="store_true", help="Force CPU mode")
+
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
