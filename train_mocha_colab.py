@@ -54,38 +54,38 @@ if torch.cuda.is_available():
     os.environ.setdefault('TORCH_USE_HIP_DSA', '1')
     os.environ.setdefault('HIP_DEVICE_WAIT_MODE', '0')
     
-    # # Patch the fit_loop to avoid HIP errors in dataloader validation
-    # import lightning.pytorch.loops.fit_loop
+    # Patch the fit_loop to avoid HIP errors in dataloader validation
+    import lightning.pytorch.loops.fit_loop
     
-    # original_setup_data = lightning.pytorch.loops.fit_loop._FitLoop.setup_data
-    # original_advance = lightning.pytorch.loops.fit_loop._FitLoop.advance
+    original_setup_data = lightning.pytorch.loops.fit_loop._FitLoop.setup_data
+    original_advance = lightning.pytorch.loops.fit_loop._FitLoop.advance
     
-    # def setup_data_patched(self):
-    #     """Patched setup_data that handles HIP errors gracefully"""
-    #     try:
-    #         return original_setup_data(self)
-    #     except RuntimeError as e:
-    #         error_msg = str(e)
-    #         if "HIP error" in error_msg or "hipError" in error_msg:
-    #             print(f"⚠️  ROCm HIP error during data setup: {error_msg[:100]}")
-    #             print(f"   Continuing anyway (ROCm compatibility workaround)")
-    #             return  # Just suppress the error and continue
-    #         raise
+    def setup_data_patched(self):
+        """Patched setup_data that handles HIP errors gracefully"""
+        try:
+            return original_setup_data(self)
+        except RuntimeError as e:
+            error_msg = str(e)
+            if "HIP error" in error_msg or "hipError" in error_msg:
+                print(f"⚠️  ROCm HIP error during data setup: {error_msg[:100]}")
+                print(f"   Continuing anyway (ROCm compatibility workaround)")
+                return  # Just suppress the error and continue
+            raise
     
-    # def advance_patched(self):
-    #     """Patched advance that handles _data_fetcher assertion errors"""
-    #     try:
-    #         return original_advance(self)
-    #     except AssertionError as e:
-    #         if "_data_fetcher is not None" in str(e):
-    #             print(f"⚠️  Data fetcher not initialized - skipping validation")
-    #             print(f"   Training will use dataloader directly (ROCm workaround)")
-    #             # Skip the assertion - the training loop will still work with the wrapped dataloader
-    #             return
-    #         raise
+    def advance_patched(self):
+        """Patched advance that handles _data_fetcher assertion errors"""
+        try:
+            return original_advance(self)
+        except AssertionError as e:
+            if "_data_fetcher is not None" in str(e):
+                print(f"⚠️  Data fetcher not initialized - skipping validation")
+                print(f"   Training will use dataloader directly (ROCm workaround)")
+                # Skip the assertion - the training loop will still work with the wrapped dataloader
+                return
+            raise
     
-    # lightning.pytorch.loops.fit_loop._FitLoop.setup_data = setup_data_patched
-    # lightning.pytorch.loops.fit_loop._FitLoop.advance = advance_patched
+    lightning.pytorch.loops.fit_loop._FitLoop.setup_data = setup_data_patched
+    lightning.pytorch.loops.fit_loop._FitLoop.advance = advance_patched
 
 
 # =========================
@@ -388,115 +388,57 @@ class MoChALoRALightning(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         device = self.device
-
-        # =====================================================
-        # ENCODE VIDEO TO LATENTS (force VAE encode on CPU)
-        # =====================================================
+        
+        # ===== ENCODE VIDEO TO LATENTS (on-the-fly to save GPU memory) =====
         if batch["needs_cache"][0]:
-
-            print(f"[Batch {batch_idx}] Encoding video to latents on CPU...")
-
+            # Encode fresh video
+            video = batch["video"].to(device)
+            print(f"[Batch {batch_idx}] Encoding video to latents...")
+            
             if self.vae is None:
                 raise RuntimeError("VAE not loaded! Cannot encode video to latents.")
-
-            # -------------------------------------------------
-            # CRITICAL FIX:
-            # Wan VAE Conv3D must run on CPU
-            # -------------------------------------------------
-
-            # Move VAE to CPU
-            self.vae.to("cpu")
-            self.vae.eval()
-            self.vae.requires_grad_(False)
-
-            # Move VIDEO to CPU too
-            video = batch["video"].cpu()
-
-            # Match dtype with VAE
+            
+            # Cast to correct dtype
             vae_dtype = next(self.vae.parameters()).dtype
             video = video.to(dtype=vae_dtype)
-
-            # Encode on CPU only
+            
             with torch.no_grad():
                 latents = self.vae.encode(video, device="cpu")
-
-            # Move latents back to GPU for training
-            latents = latents.to(device)
-
-            # Try saving cached latents
+            
+            # Move VAE to CPU to free GPU memory for training
+            self.vae.to("cpu")
+            self.vae.requires_grad_(False)
+            
+            # Try to save for next epoch
             try:
                 torch.save(latents.cpu(), batch["latent_path"][0])
-            except Exception as e:
-                print(f"Warning: could not save latent cache: {e}")
-
+            except:
+                pass  # Ignore save errors
         else:
-            # -------------------------------------------------
-            # Load cached latent
-            # -------------------------------------------------
+            # Load pre-cached latent
             latents = torch.load(batch["latent_path"][0]).to(device)
-
-        # =====================================================
-        # DIFFUSION PROCESS
-        # =====================================================
+        
+        # ===== DIFFUSION PROCESS =====
         noise = torch.randn_like(latents)
-
-        # Make sure scheduler timesteps exist
-        if not hasattr(self.scheduler, "timesteps") or len(self.scheduler.timesteps) == 0:
-            self.scheduler.set_timesteps(1000)
-
+        
+        # Sample random timestep (scale to scheduler's timestep range)
         num_scheduler_steps = len(self.scheduler.timesteps)
-
-        t_id = torch.randint(
-            0,
-            num_scheduler_steps,
-            (1,),
-            device="cpu"
-        )
-
+        t_id = torch.randint(0, num_scheduler_steps, (1,), device="cpu")
         timestep = self.scheduler.timesteps[t_id].to(device)
-
-        noisy_latents = self.scheduler.add_noise(
-            latents,
-            noise,
-            timestep
-        )
-
-        # =====================================================
-        # FORWARD PASS
-        # =====================================================
-
+        
+        noisy_latents = self.scheduler.add_noise(latents, noise, timestep)
+        
+        # ===== FORWARD PASS =====
+        # Create empty context (text encoder not loaded to save GPU memory)
         batch_size = noisy_latents.shape[0]
-
-        # Empty text context (since text encoder skipped)
-        context = torch.zeros(
-            batch_size,
-            1,
-            4096,
-            device=device,   # IMPORTANT: same device as model
-            dtype=noisy_latents.dtype
-        )
-
-        # Forward through DiT
-        noise_pred = self.dit(
-            noisy_latents,
-            timestep,
-            context
-        )
-
-        # =====================================================
-        # LOSS
-        # =====================================================
-        loss = torch.nn.functional.mse_loss(
-            noise_pred.float(),
-            noise.float()
-        )
-
-        self.log(
-            "train_loss",
-            loss,
-            prog_bar=True
-        )
-
+        context = torch.zeros(batch_size, 1, 4096, device="cpu", dtype=noisy_latents.dtype)
+        
+        # Call WanModel forward with positional args: (noisy_latents, timestep, context)
+        noise_pred = self.dit(noisy_latents, timestep, context)
+        
+        loss = torch.nn.functional.mse_loss(noise_pred.float(), noise.float())
+        self.log("train_loss", loss, prog_bar=True)
+        
         return loss
 
     def configure_optimizers(self):
