@@ -88,7 +88,7 @@ pipe = WanVideoMoChaPipeline.from_model_manager(
 )
 
 vae = pipe.vae
-vae.to("cpu")
+vae.to("cuda")
 vae.eval()
 
 metadata = pd.read_csv(DATA_PATH)
@@ -107,7 +107,7 @@ for idx, row in metadata.iterrows():
 
     # dtype match fix
     vae_dtype = next(vae.parameters()).dtype
-    video = video.to(dtype=vae_dtype)
+    video = video.to(device="cuda", dtype=vae_dtype)
 
     with torch.no_grad():
         latent = vae.encode(video, device="cuda")
