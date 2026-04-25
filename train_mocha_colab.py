@@ -4,7 +4,6 @@ Paste this entire script into a Colab cell and run!
 """
 
 import os
-os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 import sys
 import subprocess
 
@@ -107,7 +106,7 @@ def preencode_videos_to_latents(model, dataset, latent_dir, device):
 # VIDEO DATASET
 # =========================
 class VideoRefDataset(Dataset):
-    def __init__(self, data_path, max_num_frames=49, frame_interval=1, num_frames=161, height=480, width=832):
+    def __init__(self, data_path, max_num_frames=161, frame_interval=1, num_frames=161, height=480, width=832):
         metadata = pd.read_csv(data_path)
         self.video_path = metadata["source_video"]
         self.mask_path = metadata["source_mask"]
@@ -254,7 +253,7 @@ class LatentDataset(Dataset):
 # LIGHTNING MODEL
 # =========================
 class MoChALoRALightning(pl.LightningModule):
-    def __init__(self, learning_rate=1e-4, lora_rank=4, lora_alpha=16, use_1_3b=False):
+    def __init__(self, learning_rate=1e-4, lora_rank=8, lora_alpha=16, use_1_3b=False):
         super().__init__()
         self.learning_rate = learning_rate
         self.lora_rank = lora_rank
@@ -291,7 +290,7 @@ class MoChALoRALightning(pl.LightningModule):
             print("⚠️  No GPU detected - using CPU (training will be SLOW)")
             torch_dtype = torch.float32
         
-        model_manager = ModelManager(torch_dtype=torch_dtype, device=device)
+        model_manager = ModelManager(torch_dtype=torch_dtype, device="cpu")
         
         if self.use_1_3b:
             print("Loading Wan2.1-T2V-1.3B from HuggingFace...")
@@ -323,7 +322,7 @@ class MoChALoRALightning(pl.LightningModule):
                     
                     try:
                         print(f"  Loading: {os.path.basename(model_file)}")
-                        model_manager.load_model(model_file, device=device, torch_dtype=torch_dtype)
+                        model_manager.load_model(model_file, device="cpu", torch_dtype=torch_dtype)
                     except Exception as e:
                         print(f"    ⚠️  Skip: {str(e)[:80]}")
                 
@@ -340,10 +339,10 @@ class MoChALoRALightning(pl.LightningModule):
             raise ValueError("14B model not supported in Colab mode. Use --use_1_3b")
         
         print("Creating pipeline...")
-        # self.pipe = WanVideoMoChaPipeline.from_model_manager(model_manager, device=device)
+        # self.pipe = WanVideoMoChaPipeline.from_model_manager(model_manager, device="cpu")
         pipe = WanVideoMoChaPipeline.from_model_manager(
             model_manager,
-            device=device
+            device="cpu"
         )
 
         self.dit = pipe.dit
@@ -355,7 +354,7 @@ class MoChALoRALightning(pl.LightningModule):
 
         if self.vae is not None:
             self.vae.requires_grad_(False)
-            self.vae.to(device)
+            self.vae.to("cpu")
 
         # delete heavy pipeline object so Lightning won't move it
         del pipe
@@ -388,82 +387,73 @@ class MoChALoRALightning(pl.LightningModule):
         print("✓ Model loaded with LoRA and gradient checkpointing!")
 
     def training_step(self, batch, batch_idx):
-        gpu_device = self.device  # training GPU
+        device = self.device
 
         # =====================================================
-        # ENCODE VIDEO TO LATENTS (STRICT CPU MODE)
+        # ENCODE VIDEO TO LATENTS (force VAE encode on CPU)
         # =====================================================
         if batch["needs_cache"][0]:
 
             print(f"[Batch {batch_idx}] Encoding video to latents on CPU...")
 
             if self.vae is None:
-                raise RuntimeError("VAE not loaded!")
+                raise RuntimeError("VAE not loaded! Cannot encode video to latents.")
 
-            # -----------------------------------
-            # FORCE VAE TO CPU
-            # -----------------------------------
+            # -------------------------------------------------
+            # CRITICAL FIX:
+            # Wan VAE Conv3D must run on CPU
+            # -------------------------------------------------
+
+            # Move VAE to CPU
             self.vae.to("cpu")
             self.vae.eval()
             self.vae.requires_grad_(False)
 
-            # -----------------------------------
-            # MOVE VIDEO TO CPU
-            # -----------------------------------
+            # Move VIDEO to CPU too
             video = batch["video"].cpu()
 
             # Match dtype with VAE
             vae_dtype = next(self.vae.parameters()).dtype
             video = video.to(dtype=vae_dtype)
 
-            # -----------------------------------
-            # CPU ONLY ENCODE
-            # -----------------------------------
+            # Encode on CPU only
             with torch.no_grad():
-                latents = self.vae.encode(
-                    video,
-                    device="cpu"   # <- MUST BE STRING "cpu"
-                )
+                latents = self.vae.encode(video, device="cpu")
 
-            # -----------------------------------
-            # MOVE LATENTS TO GPU FOR TRAINING
-            # -----------------------------------
-            latents = latents.to(gpu_device)
-            del video
-            torch.cuda.empty_cache()
+            # Move latents back to GPU for training
+            latents = latents.to(device)
 
-            # Save cache
+            # Try saving cached latents
             try:
                 torch.save(latents.cpu(), batch["latent_path"][0])
             except Exception as e:
-                print(f"Cache save warning: {e}")
+                print(f"Warning: could not save latent cache: {e}")
 
         else:
-            latents = torch.load(
-                batch["latent_path"][0]
-            ).to(gpu_device)
+            # -------------------------------------------------
+            # Load cached latent
+            # -------------------------------------------------
+            latents = torch.load(batch["latent_path"][0]).to(device)
 
         # =====================================================
-        # DIFFUSION
+        # DIFFUSION PROCESS
         # =====================================================
         noise = torch.randn_like(latents)
 
+        # Make sure scheduler timesteps exist
         if not hasattr(self.scheduler, "timesteps") or len(self.scheduler.timesteps) == 0:
             self.scheduler.set_timesteps(1000)
 
         num_scheduler_steps = len(self.scheduler.timesteps)
 
-        batch_size = latents.shape[0]
-
-        # MUST be 1D tensor, not scalar
         t_id = torch.randint(
             0,
             num_scheduler_steps,
-            (batch_size,),
+            (1,),
             device="cpu"
         )
 
-        timestep = self.scheduler.timesteps[t_id].to(gpu_device)
+        timestep = self.scheduler.timesteps[t_id].to(device)
 
         noisy_latents = self.scheduler.add_noise(
             latents,
@@ -471,58 +461,58 @@ class MoChALoRALightning(pl.LightningModule):
             timestep
         )
 
+        # =====================================================
+        # FORWARD PASS
+        # =====================================================
+
         batch_size = noisy_latents.shape[0]
 
+        # Empty text context (since text encoder skipped)
         context = torch.zeros(
             batch_size,
             1,
             4096,
-            device=gpu_device,
+            device=device,   # IMPORTANT: same device as model
             dtype=noisy_latents.dtype
         )
 
-        torch.cuda.empty_cache()
-        with torch.autocast("cuda", dtype=torch.float16):
-            noise_pred = self.dit(
-                noisy_latents,
-                timestep,
-                context
-            )
+        # Forward through DiT
+        noise_pred = self.dit(
+            noisy_latents,
+            timestep,
+            context
+        )
 
+        # =====================================================
+        # LOSS
+        # =====================================================
         loss = torch.nn.functional.mse_loss(
             noise_pred.float(),
             noise.float()
         )
 
-        self.log("train_loss", loss, prog_bar=True)
+        self.log(
+            "train_loss",
+            loss,
+            prog_bar=True
+        )
 
         return loss
-    
+
     def configure_optimizers(self):
         trainable_params = []
-
+        
         for name, param in self.dit.named_parameters():
-            if "lora" in name.lower():
+            if "lora" in name:
                 param.requires_grad = True
                 trainable_params.append(param)
             else:
                 param.requires_grad = False
-
+        
         num_params = sum(p.numel() for p in trainable_params)
         print(f"✓ Trainable LoRA params: {num_params:,}")
-
-        if len(trainable_params) == 0:
-            raise RuntimeError(
-                "No trainable LoRA params found. LoRA injection failed."
-            )
-
-        optimizer = torch.optim.AdamW(
-            trainable_params,
-            lr=self.learning_rate,
-            weight_decay=0.01
-        )
-
-        return optimizer
+        
+        return torch.optim.AdamW(trainable_params, lr=self.learning_rate)
 
 
 # =========================
@@ -571,11 +561,11 @@ def main():
     parser.add_argument("--num_epochs", type=int, default=5, help="Number of epochs")
     parser.add_argument("--max_steps", type=int, default=1000, help="Max training steps")
     parser.add_argument("--learning_rate", type=float, default=1e-4, help="Learning rate")
-    parser.add_argument("--lora_rank", type=int, default=2, help="LoRA rank")
+    parser.add_argument("--lora_rank", type=int, default=8, help="LoRA rank")
     parser.add_argument("--lora_alpha", type=int, default=16, help="LoRA alpha")
-    parser.add_argument("--num_frames", type=int, default=33, help="Number of video frames (reduce to save memory)")
-    parser.add_argument("--height", type=int, default=256, help="Video height (reduce to save memory)")
-    parser.add_argument("--width", type=int, default=448, help="Video width (reduce to save memory)")
+    parser.add_argument("--num_frames", type=int, default=161, help="Number of video frames (reduce to save memory)")
+    parser.add_argument("--height", type=int, default=480, help="Video height (reduce to save memory)")
+    parser.add_argument("--width", type=int, default=832, help="Video width (reduce to save memory)")
     parser.add_argument("--use_1_3b", action="store_true", help="Use 1.3B model instead of 14B")
     parser.add_argument("--no_gpu", action="store_true", help="Disable GPU (use CPU instead)")
     
@@ -626,7 +616,7 @@ def main():
     
     # Pre-encode videos to latents (saves GPU memory during training)
     # Get device from the loaded model
-    model_device = next(model.dit.parameters()).device
+    model_device = next(model.dit.parameters()).device if model.pipe and model.pipe.dit else torch.device("cpu")
     preencode_videos_to_latents(model, dataset, args.latent_dir, model_device)
     
     # Setup trainer
@@ -688,7 +678,7 @@ def main():
         log_every_n_steps=10,
         enable_progress_bar=True,  # Disable progress bar for ROCm compatibility
         num_sanity_val_steps=0,  # Skip sanity validation
-        precision="16-mixed",
+        precision="32",
         enable_model_summary=False,  # Reduce overhead
         logger=False,  # Disable logging for now
         limit_train_batches=args.max_steps,  # Limit batches to avoid dataloader length check
