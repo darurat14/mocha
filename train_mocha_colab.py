@@ -230,12 +230,16 @@ class MoChALoRALightning(pl.LightningModule):
 
         noise = torch.randn_like(latents)
 
+        self.scheduler.timesteps = self.scheduler.timesteps.to(self.runtime_device)
+
         t_id = torch.randint(
             0,
             len(self.scheduler.timesteps),
             (1,),
             device=device
         )
+
+        timestep = self.scheduler.timesteps[t_id]
 
         timestep = self.scheduler.timesteps[t_id]
 
