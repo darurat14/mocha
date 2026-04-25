@@ -1,12 +1,5 @@
-# Full corrected MoCha LoRA training script (CPU for VAE encode + GPU for DiT training)
-# Key fixes included:
-# - context tensor on same device as DiT/GPU
-# - latents encoded on CPU then moved to GPU
-# - self.dit.to(device) after LoRA injection
-# - safe model_device detection
-# - removed broken self.pipe dependency
-
 import os
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 import sys
 import argparse
 import subprocess
@@ -177,11 +170,18 @@ class MoChALoRALightning(pl.LightningModule):
         self.vae = pipe.vae
         self.scheduler = pipe.scheduler
 
-        self.dit.requires_grad_(False)
-
+        # keep VAE always on CPU
         if self.vae is not None:
-            self.vae.requires_grad_(False)
             self.vae.to("cpu")
+            self.vae.requires_grad_(False)
+
+        # move ONLY DiT to GPU for training
+        if torch.cuda.is_available():
+            print("Moving DiT to GPU only...")
+            self.dit = self.dit.to("cuda")
+        else:
+            print("Using CPU only for DiT")
+            self.dit = self.dit.to("cpu")
 
         del pipe
 
@@ -203,7 +203,7 @@ class MoChALoRALightning(pl.LightningModule):
         print("Model ready.")
 
     def training_step(self, batch, batch_idx):
-        device = self.device
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         if batch["needs_cache"][0]:
             print(f"[Batch {batch_idx}] Encoding on CPU...")
@@ -221,8 +221,9 @@ class MoChALoRALightning(pl.LightningModule):
                     device="cpu"
                 )
 
-            # IMPORTANT FIX
-            latents = latents.to(device)
+            # move only encoded latent to GPU
+            latents = latents.to(device, non_blocking=True)
+            torch.cuda.empty_cache()
 
             try:
                 torch.save(latents.cpu(), batch["latent_path"][0])
