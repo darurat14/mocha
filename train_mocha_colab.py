@@ -4,6 +4,7 @@ Paste this entire script into a Colab cell and run!
 """
 
 import os
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 import sys
 import subprocess
 
@@ -106,7 +107,7 @@ def preencode_videos_to_latents(model, dataset, latent_dir, device):
 # VIDEO DATASET
 # =========================
 class VideoRefDataset(Dataset):
-    def __init__(self, data_path, max_num_frames=161, frame_interval=1, num_frames=161, height=480, width=832):
+    def __init__(self, data_path, max_num_frames=49, frame_interval=1, num_frames=161, height=480, width=832):
         metadata = pd.read_csv(data_path)
         self.video_path = metadata["source_video"]
         self.mask_path = metadata["source_mask"]
@@ -253,7 +254,7 @@ class LatentDataset(Dataset):
 # LIGHTNING MODEL
 # =========================
 class MoChALoRALightning(pl.LightningModule):
-    def __init__(self, learning_rate=1e-4, lora_rank=8, lora_alpha=16, use_1_3b=False):
+    def __init__(self, learning_rate=1e-4, lora_rank=4, lora_alpha=16, use_1_3b=False):
         super().__init__()
         self.learning_rate = learning_rate
         self.lora_rank = lora_rank
@@ -569,8 +570,8 @@ def main():
     parser.add_argument("--lora_rank", type=int, default=8, help="LoRA rank")
     parser.add_argument("--lora_alpha", type=int, default=16, help="LoRA alpha")
     parser.add_argument("--num_frames", type=int, default=161, help="Number of video frames (reduce to save memory)")
-    parser.add_argument("--height", type=int, default=480, help="Video height (reduce to save memory)")
-    parser.add_argument("--width", type=int, default=832, help="Video width (reduce to save memory)")
+    parser.add_argument("--height", type=int, default=256, help="Video height (reduce to save memory)")
+    parser.add_argument("--width", type=int, default=448, help="Video width (reduce to save memory)")
     parser.add_argument("--use_1_3b", action="store_true", help="Use 1.3B model instead of 14B")
     parser.add_argument("--no_gpu", action="store_true", help="Disable GPU (use CPU instead)")
     
