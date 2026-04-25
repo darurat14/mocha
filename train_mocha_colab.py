@@ -429,6 +429,8 @@ class MoChALoRALightning(pl.LightningModule):
             # MOVE LATENTS TO GPU FOR TRAINING
             # -----------------------------------
             latents = latents.to(gpu_device)
+            del video
+            torch.cuda.empty_cache()
 
             # Save cache
             try:
@@ -479,6 +481,8 @@ class MoChALoRALightning(pl.LightningModule):
             dtype=noisy_latents.dtype
         )
 
+        torch.cuda.empty_cache()
+        with torch.autocast("cuda", dtype=torch.float16):
         noise_pred = self.dit(
             noisy_latents,
             timestep,
@@ -567,9 +571,9 @@ def main():
     parser.add_argument("--num_epochs", type=int, default=5, help="Number of epochs")
     parser.add_argument("--max_steps", type=int, default=1000, help="Max training steps")
     parser.add_argument("--learning_rate", type=float, default=1e-4, help="Learning rate")
-    parser.add_argument("--lora_rank", type=int, default=8, help="LoRA rank")
+    parser.add_argument("--lora_rank", type=int, default=2, help="LoRA rank")
     parser.add_argument("--lora_alpha", type=int, default=16, help="LoRA alpha")
-    parser.add_argument("--num_frames", type=int, default=161, help="Number of video frames (reduce to save memory)")
+    parser.add_argument("--num_frames", type=int, default=33, help="Number of video frames (reduce to save memory)")
     parser.add_argument("--height", type=int, default=256, help="Video height (reduce to save memory)")
     parser.add_argument("--width", type=int, default=448, help="Video width (reduce to save memory)")
     parser.add_argument("--use_1_3b", action="store_true", help="Use 1.3B model instead of 14B")
@@ -622,7 +626,7 @@ def main():
     
     # Pre-encode videos to latents (saves GPU memory during training)
     # Get device from the loaded model
-    model_device = next(model.dit.parameters()).device if model.pipe and model.pipe.dit else torch.device("cpu")
+    model_device = next(model.dit.parameters()).device
     preencode_videos_to_latents(model, dataset, args.latent_dir, model_device)
     
     # Setup trainer
@@ -684,7 +688,7 @@ def main():
         log_every_n_steps=10,
         enable_progress_bar=True,  # Disable progress bar for ROCm compatibility
         num_sanity_val_steps=0,  # Skip sanity validation
-        precision="32",
+        precision="16-mixed",
         enable_model_summary=False,  # Reduce overhead
         logger=False,  # Disable logging for now
         limit_train_batches=args.max_steps,  # Limit batches to avoid dataloader length check
