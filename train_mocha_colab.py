@@ -267,18 +267,18 @@ class MoChALoRALightning(pl.LightningModule):
 
         self.log("train_loss", loss, prog_bar=True)
         return loss
-        def configure_optimizers(self):
-            trainable = []
+    def configure_optimizers(self):
+        trainable = []
 
-            for name, param in self.dit.named_parameters():
-                if "lora" in name:
-                    param.requires_grad = True
-                    trainable.append(param)
-                else:
-                    param.requires_grad = False
+        for name, param in self.dit.named_parameters():
+            if "lora" in name:
+                param.requires_grad = True
+                trainable.append(param)
+            else:
+                param.requires_grad = False
 
-            print(f"Trainable params: {sum(p.numel() for p in trainable):,}")
-            return torch.optim.AdamW(trainable, lr=self.learning_rate)
+        print(f"Trainable params: {sum(p.numel() for p in trainable):,}")
+        return torch.optim.AdamW(trainable, lr=self.learning_rate)
 
 
 def main():
