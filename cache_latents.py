@@ -106,8 +106,15 @@ for idx, row in metadata.iterrows():
 
     print(f"Encoding {idx}")
 
-    video = load_video(row["source_video"])
-    video = video.unsqueeze(0)
+    video = item["video"]
+
+    # IMPORTANT FIX
+    vae_dtype = next(vae.parameters()).dtype
+
+    video = video.to(
+        device="cpu",
+        dtype=vae_dtype
+    )
 
     with torch.no_grad():
         latent = vae.encode(
@@ -115,9 +122,6 @@ for idx, row in metadata.iterrows():
             device="cpu"
         )
 
-    torch.save(
-        latent.cpu(),
-        save_path
-    )
+    torch.save(latent.cpu(), f"./latents/{idx}.pt")
 
 print("Latent caching complete.")
