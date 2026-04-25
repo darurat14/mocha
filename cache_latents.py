@@ -37,7 +37,7 @@ transform = v2.Compose([
 def load_image(path):
     img = Image.open(path).convert("RGB")
     img = transform(img)
-    img = img.unsqueeze(1)
+    img = img.unsqueeze(0).unsqueeze(2)
     return img
 
 
@@ -60,7 +60,8 @@ def load_video(path):
     frames = torch.stack(frames, dim=0)
     frames = rearrange(frames, "t c h w -> c t h w")
 
-    return frames
+    frames = frames.unsqueeze(0)
+    return framesreturn frames
 
 
 print("Loading VAE only...")
