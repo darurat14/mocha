@@ -118,7 +118,7 @@ class MoChALoRALightning(pl.LightningModule):
         import glob
 
         device = self.runtime_device
-        torch_dtype = torch.float32
+        torch_dtype = torch.float16
 
         if torch.cuda.is_available():
             print(f"✓ GPU detected: {torch.cuda.get_device_name(0)}")
@@ -252,11 +252,14 @@ class MoChALoRALightning(pl.LightningModule):
             dtype=noisy_latents.dtype,
         )
 
-        noise_pred = self.dit(
-            noisy_latents,
-            timestep,
-            context,
-        )
+        with torch.cuda.amp.autocast():
+            noise_pred = self.dit(
+                noisy_latents,
+                timestep,
+                context,
+            )
+        del noisy_latents
+        torch.cuda.empty_cache()
 
         loss = torch.nn.functional.mse_loss(
             noise_pred.float(),
@@ -308,7 +311,12 @@ def main():
     )
     model.load_models()
 
-    base_dataset = VideoRefDataset(args.data_path)
+    base_dataset = VideoRefDataset(
+        args.data_path,
+        num_frames=args.num_frames,
+        height=args.height,
+        width=args.width,
+    )
     dataset = LatentDataset(base_dataset, args.latent_dir)
 
     dataloader = DataLoader(
@@ -336,7 +344,7 @@ def main():
         accelerator="gpu" if torch.cuda.is_available() else "cpu",
         devices=1,
         callbacks=[checkpoint_callback],
-        precision="32",
+        precision="16-mixed",
         logger=False,
         enable_model_summary=False,
         num_sanity_val_steps=0,
