@@ -286,11 +286,11 @@ class MoChALoRALightning(pl.LightningModule):
             os.environ["HSA_NO_SCRATCH_RECLAIM"] = "1"
             os.environ["AMD_SERIALIZE_KERNEL"] = "3"
         else:
-            device = torch.device("cpu")
+            device = torch.device("cuda")
             print("⚠️  No GPU detected - using CPU (training will be SLOW)")
             torch_dtype = torch.float32
         
-        model_manager = ModelManager(torch_dtype=torch_dtype, device="cpu")
+        model_manager = ModelManager(torch_dtype=torch_dtype, device="cuda")
         
         if self.use_1_3b:
             print("Loading Wan2.1-T2V-1.3B from HuggingFace...")
@@ -322,7 +322,7 @@ class MoChALoRALightning(pl.LightningModule):
                     
                     try:
                         print(f"  Loading: {os.path.basename(model_file)}")
-                        model_manager.load_model(model_file, device="cpu", torch_dtype=torch_dtype)
+                        model_manager.load_model(model_file, device="cuda", torch_dtype=torch_dtype)
                     except Exception as e:
                         print(f"    ⚠️  Skip: {str(e)[:80]}")
                 
@@ -339,10 +339,10 @@ class MoChALoRALightning(pl.LightningModule):
             raise ValueError("14B model not supported in Colab mode. Use --use_1_3b")
         
         print("Creating pipeline...")
-        # self.pipe = WanVideoMoChaPipeline.from_model_manager(model_manager, device="cpu")
+        # self.pipe = WanVideoMoChaPipeline.from_model_manager(model_manager, device="cuda")
         pipe = WanVideoMoChaPipeline.from_model_manager(
             model_manager,
-            device="cpu"
+            device="cuda"
         )
 
         self.dit = pipe.dit
@@ -354,7 +354,7 @@ class MoChALoRALightning(pl.LightningModule):
 
         if self.vae is not None:
             self.vae.requires_grad_(False)
-            self.vae.to("cpu")
+            self.vae.to("cuda")
 
         # delete heavy pipeline object so Lightning won't move it
         del pipe
@@ -405,7 +405,7 @@ class MoChALoRALightning(pl.LightningModule):
             # -------------------------------------------------
 
             # Move VAE to CPU
-            self.vae.to("cpu")
+            self.vae.to("cuda")
             self.vae.eval()
             self.vae.requires_grad_(False)
 
@@ -418,7 +418,7 @@ class MoChALoRALightning(pl.LightningModule):
 
             # Encode on CPU only
             with torch.no_grad():
-                latents = self.vae.encode(video, device="cpu")
+                latents = self.vae.encode(video, device="cuda")
 
             # Move latents back to GPU for training
             latents = latents.to(device)
@@ -450,7 +450,7 @@ class MoChALoRALightning(pl.LightningModule):
             0,
             num_scheduler_steps,
             (1,),
-            device="cpu"
+            device="cuda"
         )
 
         timestep = self.scheduler.timesteps[t_id].to(device)
@@ -616,12 +616,12 @@ def main():
     
     # Pre-encode videos to latents (saves GPU memory during training)
     # Get device from the loaded model
-    model_device = next(model.dit.parameters()).device if model.pipe and model.pipe.dit else torch.device("cpu")
+    model_device = next(model.dit.parameters()).device if model.pipe and model.pipe.dit else torch.device("cuda")
     preencode_videos_to_latents(model, dataset, args.latent_dir, model_device)
     
     # Setup trainer
     use_gpu = (not args.no_gpu) and torch.cuda.is_available()
-    accelerator = "gpu" if use_gpu else "cpu"
+    accelerator = "gpu" if use_gpu else "cuda"
     devices = 1  # Always 1 device (single GPU or single CPU)
     print(f"Training on: {accelerator.upper()}")
     if use_gpu:
