@@ -388,57 +388,115 @@ class MoChALoRALightning(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         device = self.device
-        
-        # ===== ENCODE VIDEO TO LATENTS (on-the-fly to save GPU memory) =====
+
+        # =====================================================
+        # ENCODE VIDEO TO LATENTS (force VAE encode on CPU)
+        # =====================================================
         if batch["needs_cache"][0]:
-            # Encode fresh video
-            video = batch["video"].to(device)
-            print(f"[Batch {batch_idx}] Encoding video to latents...")
-            
+
+            print(f"[Batch {batch_idx}] Encoding video to latents on CPU...")
+
             if self.vae is None:
                 raise RuntimeError("VAE not loaded! Cannot encode video to latents.")
-            
-            # Cast to correct dtype
+
+            # -------------------------------------------------
+            # CRITICAL FIX:
+            # Wan VAE Conv3D must run on CPU
+            # -------------------------------------------------
+
+            # Move VAE to CPU
+            self.vae.to("cpu")
+            self.vae.eval()
+            self.vae.requires_grad_(False)
+
+            # Move VIDEO to CPU too
+            video = batch["video"].cpu()
+
+            # Match dtype with VAE
             vae_dtype = next(self.vae.parameters()).dtype
             video = video.to(dtype=vae_dtype)
-            
+
+            # Encode on CPU only
             with torch.no_grad():
                 latents = self.vae.encode(video, device="cpu")
-            
-            # Move VAE to CPU to free GPU memory for training
-            self.vae.to("cpu")
-            self.vae.requires_grad_(False)
-            
-            # Try to save for next epoch
+
+            # Move latents back to GPU for training
+            latents = latents.to(device)
+
+            # Try saving cached latents
             try:
                 torch.save(latents.cpu(), batch["latent_path"][0])
-            except:
-                pass  # Ignore save errors
+            except Exception as e:
+                print(f"Warning: could not save latent cache: {e}")
+
         else:
-            # Load pre-cached latent
+            # -------------------------------------------------
+            # Load cached latent
+            # -------------------------------------------------
             latents = torch.load(batch["latent_path"][0]).to(device)
-        
-        # ===== DIFFUSION PROCESS =====
+
+        # =====================================================
+        # DIFFUSION PROCESS
+        # =====================================================
         noise = torch.randn_like(latents)
-        
-        # Sample random timestep (scale to scheduler's timestep range)
+
+        # Make sure scheduler timesteps exist
+        if not hasattr(self.scheduler, "timesteps") or len(self.scheduler.timesteps) == 0:
+            self.scheduler.set_timesteps(1000)
+
         num_scheduler_steps = len(self.scheduler.timesteps)
-        t_id = torch.randint(0, num_scheduler_steps, (1,), device="cpu")
+
+        t_id = torch.randint(
+            0,
+            num_scheduler_steps,
+            (1,),
+            device="cpu"
+        )
+
         timestep = self.scheduler.timesteps[t_id].to(device)
-        
-        noisy_latents = self.scheduler.add_noise(latents, noise, timestep)
-        
-        # ===== FORWARD PASS =====
-        # Create empty context (text encoder not loaded to save GPU memory)
+
+        noisy_latents = self.scheduler.add_noise(
+            latents,
+            noise,
+            timestep
+        )
+
+        # =====================================================
+        # FORWARD PASS
+        # =====================================================
+
         batch_size = noisy_latents.shape[0]
-        context = torch.zeros(batch_size, 1, 4096, device="cpu", dtype=noisy_latents.dtype)
-        
-        # Call WanModel forward with positional args: (noisy_latents, timestep, context)
-        noise_pred = self.dit(noisy_latents, timestep, context)
-        
-        loss = torch.nn.functional.mse_loss(noise_pred.float(), noise.float())
-        self.log("train_loss", loss, prog_bar=True)
-        
+
+        # Empty text context (since text encoder skipped)
+        context = torch.zeros(
+            batch_size,
+            1,
+            4096,
+            device=device,   # IMPORTANT: same device as model
+            dtype=noisy_latents.dtype
+        )
+
+        # Forward through DiT
+        noise_pred = self.dit(
+            noisy_latents,
+            timestep,
+            context
+        )
+
+        # =====================================================
+        # LOSS
+        # =====================================================
+        loss = torch.nn.functional.mse_loss(
+            noise_pred.float(),
+            noise.float()
+        )
+
+        self.log(
+            "train_loss",
+            loss,
+            prog_bar=True
+        )
+
         return loss
 
     def configure_optimizers(self):
