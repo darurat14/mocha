@@ -185,7 +185,7 @@ class MoChALoRALightning(pl.LightningModule):
         )
 
         self.dit = pipe.dit
-        self.vae = pipe.vae
+        # self.vae = pipe.vae
         self.scheduler = pipe.scheduler
 
         # keep VAE always on CPU
@@ -221,84 +221,64 @@ class MoChALoRALightning(pl.LightningModule):
         print("Model ready.")
 
     def training_step(self, batch, batch_idx):
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        device = next(self.dit.parameters()).device
 
-        if batch["needs_cache"][0]:
-            print(f"[Batch {batch_idx}] Encoding on CPU...")
-
-            if self.vae is None:
-                raise RuntimeError("VAE missing")
-
-            video = batch["video"].cpu()
-            vae_dtype = next(self.vae.parameters()).dtype
-            video = video.to(dtype=vae_dtype)
-
-            with torch.no_grad():
-                latents = self.vae.encode(
-                    video,
-                    device="cpu"
-                )
-
-            # move only encoded latent to GPU
-            latents = latents.to(device, non_blocking=True)
-            torch.cuda.empty_cache()
-
-            try:
-                torch.save(latents.cpu(), batch["latent_path"][0])
-            except Exception:
-                pass
-
-        else:
-            latents = torch.load(batch["latent_path"][0]).to(device)
+        latents = torch.load(
+            batch["latent_path"][0],
+            map_location="cpu"
+        ).to(device, non_blocking=True)
 
         noise = torch.randn_like(latents)
 
-        num_steps = len(self.scheduler.timesteps)
-        t_id = torch.randint(0, num_steps, (1,), device="cpu")
-        timestep = self.scheduler.timesteps[t_id].to(device)
+        t_id = torch.randint(
+            0,
+            len(self.scheduler.timesteps),
+            (1,),
+            device=device
+        )
 
-        noisy_latents = self.scheduler.add_noise(latents, noise, timestep)
+        timestep = self.scheduler.timesteps[t_id]
 
-        batch_size = noisy_latents.shape[0]
+        noisy_latents = self.scheduler.add_noise(
+            latents,
+            noise,
+            timestep
+        )
 
-        # IMPORTANT FIX
         context = torch.zeros(
-            batch_size,
+            noisy_latents.shape[0],
             1,
             4096,
             device=device,
-            dtype=noisy_latents.dtype,
+            dtype=noisy_latents.dtype
         )
 
         with torch.cuda.amp.autocast():
             noise_pred = self.dit(
                 noisy_latents,
                 timestep,
-                context,
+                context
             )
-        del noisy_latents
-        torch.cuda.empty_cache()
 
         loss = torch.nn.functional.mse_loss(
             noise_pred.float(),
-            noise.float(),
+            noise.float()
         )
 
         self.log("train_loss", loss, prog_bar=True)
         return loss
+        def configure_optimizers(self):
+            trainable = []
 
-    def configure_optimizers(self):
-        trainable = []
+            for name, param in self.dit.named_parameters():
+                if "lora" in name:
+                    param.requires_grad = True
+                    trainable.append(param)
+                else:
+                    param.requires_grad = False
 
-        for name, param in self.dit.named_parameters():
-            if "lora" in name:
-                param.requires_grad = True
-                trainable.append(param)
-            else:
-                param.requires_grad = False
-
-        print(f"Trainable params: {sum(p.numel() for p in trainable):,}")
-        return torch.optim.AdamW(trainable, lr=self.learning_rate)
+            print(f"Trainable params: {sum(p.numel() for p in trainable):,}")
+            return torch.optim.AdamW(trainable, lr=self.learning_rate)
 
 
 def main():
