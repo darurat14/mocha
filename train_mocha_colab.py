@@ -234,7 +234,7 @@ class MoChALoRALightning(pl.LightningModule):
             0,
             len(self.scheduler.timesteps),
             (1,),
-            device="cpu"
+            device="device"
         )
 
         timestep = self.scheduler.timesteps[t_id]
