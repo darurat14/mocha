@@ -489,20 +489,32 @@ class MoChALoRALightning(pl.LightningModule):
         self.log("train_loss", loss, prog_bar=True)
 
         return loss
-        def configure_optimizers(self):
-            trainable_params = []
-            
-            for name, param in self.dit.named_parameters():
-                if "lora" in name:
-                    param.requires_grad = True
-                    trainable_params.append(param)
-                else:
-                    param.requires_grad = False
-            
-            num_params = sum(p.numel() for p in trainable_params)
-            print(f"✓ Trainable LoRA params: {num_params:,}")
-            
-            return torch.optim.AdamW(trainable_params, lr=self.learning_rate)
+    
+    def configure_optimizers(self):
+        trainable_params = []
+
+        for name, param in self.dit.named_parameters():
+            if "lora" in name.lower():
+                param.requires_grad = True
+                trainable_params.append(param)
+            else:
+                param.requires_grad = False
+
+        num_params = sum(p.numel() for p in trainable_params)
+        print(f"✓ Trainable LoRA params: {num_params:,}")
+
+        if len(trainable_params) == 0:
+            raise RuntimeError(
+                "No trainable LoRA params found. LoRA injection failed."
+            )
+
+        optimizer = torch.optim.AdamW(
+            trainable_params,
+            lr=self.learning_rate,
+            weight_decay=0.01
+        )
+
+        return optimizer
 
 
 # =========================
