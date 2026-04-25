@@ -352,7 +352,7 @@ def main():
 
         num_sanity_val_steps=0,
 
-        enable_progress_bar=False,
+        enable_progress_bar=True,
 
         limit_train_batches=args.max_steps,
     )
