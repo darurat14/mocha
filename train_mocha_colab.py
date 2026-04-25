@@ -133,8 +133,8 @@ class MoChALoRALightning(pl.LightningModule):
         print("Loading Wan2.1-T2V-1.3B from HuggingFace...")
         try:
             wan_path = snapshot_download(
-                repo_id="Wan-AI/Wan2.1-T2V-1.3B",
-                local_dir="./models/wan2.1_1.3b"
+                repo_id="cerspense/zeroscope_v2_576w",
+                local_dir="./models/zeroscope_v2_576w"
             )
 
             model_files = glob.glob(os.path.join(wan_path, "*.safetensors")) + \
